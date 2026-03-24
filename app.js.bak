@@ -1,0 +1,3464 @@
+﻿(() => {
+  const WASM_BASE64 = "AGFzbQEAAAABFAJgBHx8fHwBfGAHf39/f3x8fAF8AwMCAAEFAwEAAQckAwZtZW1vcnkCAAxwcmVkaWN0X2VtYXgAAAhzc2VfZW1heAABCocBAhAAIAEgAiAAoiADIACgo6ALdAIBfwR8RAAAAAAAAAAAIQhBACEHAkADQCAHIANPDQEgACAHQQhsaisDACEJIAEgB0EIbGorAwAhCiACIAdBCGxqKwMAIQsgCCAEIAUgCaIgBiAJoKOgIAqhIQkgCSAJoiALoqAhCCAHQQFqIQcMAAsLIAgL";
+
+  const SAMPLE_CSV = `study,treatment,dose,effect,se
+S1,Placebo,0,0,0.12
+S1,DrugA,5,0.28,0.15
+S1,DrugB,10,0.42,0.14
+S2,Placebo,0,0,0.11
+S2,DrugA,10,0.56,0.13
+S2,DrugC,15,0.64,0.15
+S3,Placebo,0,0,0.1
+S3,DrugB,20,0.72,0.13
+S3,DrugC,25,0.83,0.14
+S4,Placebo,0,0,0.12
+S4,DrugA,20,0.82,0.16
+S4,DrugB,30,0.92,0.15
+S4,DrugC,35,1.02,0.16`;
+
+  const palette = ["#ffb703", "#00b4d8", "#ff6b6b", "#80ed99", "#f4a261", "#e9c46a", "#48cae4"];
+
+  const state = {
+    wasm: null,
+    rawData: [],
+    data: [],
+    fits: {},
+    edges: [],
+    treatments: [],
+    allTreatments: [],
+    range: { minDose: 0, maxDose: 1, minEffect: 0, maxEffect: 1 },
+    reference: "",
+    freeBaseline: false,
+    logDose: false,
+    targetDose: 10,
+    hoverPoints: [],
+    relativeMode: false,
+    validation: { summary: {}, warnings: [] },
+    modelChoice: "auto",
+    rankMetric: "target",
+    higherIsBetter: true,
+    showBands: true,
+    randomEffects: false,
+    multiArmAdjust: true,
+    useCovariate: false,
+    tau2Method: "dl",
+    selectionBias: "none",
+    covariateMean: NaN,
+    covariateBeta: NaN,
+    tau2ByTreatment: {},
+    globalTau2: NaN,
+    globalI2: NaN,
+    globalH2: NaN,
+    networkMetrics: { density: NaN, components: NaN, meanDegree: NaN },
+    directEstimates: new Map(),
+    loopMetrics: { count: NaN, maxAbs: NaN, q: NaN, p: NaN },
+    inconsistency: { q: NaN, df: NaN },
+    designByTreatment: { q: NaN, df: NaN },
+    bootstrap: { iterations: 200, running: false },
+    bootstrapResult: null,
+    bootstrapKey: "",
+    lastStats: [],
+    lastCurves: [],
+    fitCandidates: {},
+    pendingSettings: null
+  };
+
+  const dom = {
+    status: document.getElementById("status"),
+    csvInput: document.getElementById("csvInput"),
+    fileInput: document.getElementById("fileInput"),
+    dropZone: document.getElementById("dropZone"),
+    parseCsv: document.getElementById("parseCsv"),
+    loadSample: document.getElementById("loadSample"),
+    referenceSelect: document.getElementById("referenceSelect"),
+    modelSelect: document.getElementById("modelSelect"),
+    baselineToggle: document.getElementById("baselineToggle"),
+    logDoseToggle: document.getElementById("logDoseToggle"),
+    higherBetterToggle: document.getElementById("higherBetterToggle"),
+    showBandsToggle: document.getElementById("showBandsToggle"),
+    randomEffectsToggle: document.getElementById("randomEffectsToggle"),
+    multiArmToggle: document.getElementById("multiArmToggle"),
+    covariateToggle: document.getElementById("covariateToggle"),
+    tau2Method: document.getElementById("tau2Method"),
+    selectionBias: document.getElementById("selectionBias"),
+    rankMetric: document.getElementById("rankMetric"),
+    targetDose: document.getElementById("targetDose"),
+    targetDoseNumber: document.getElementById("targetDoseNumber"),
+    bootstrapIter: document.getElementById("bootstrapIter"),
+    runBootstrap: document.getElementById("runBootstrap"),
+    clearBootstrap: document.getElementById("clearBootstrap"),
+    bootstrapStatus: document.getElementById("bootstrapStatus"),
+    summaryBody: document.getElementById("summaryBody"),
+    doseChart: document.getElementById("doseChart"),
+    doseTooltip: document.getElementById("doseTooltip"),
+    rankChart: document.getElementById("rankChart"),
+    networkChart: document.getElementById("networkChart"),
+    biasChart: document.getElementById("biasChart"),
+    rankTitle: document.getElementById("rankTitle"),
+    exportJson: document.getElementById("exportJson"),
+    exportSummaryCsv: document.getElementById("exportSummaryCsv"),
+    exportPredCsv: document.getElementById("exportPredCsv"),
+    exportCharts: document.getElementById("exportCharts"),
+    copyLink: document.getElementById("copyLink"),
+    exportStatus: document.getElementById("exportStatus"),
+    chartTabs: document.getElementById("chartTabs"),
+    chartHeader: document.getElementById("chartHeader"),
+    chartEmpty: document.getElementById("chartEmpty"),
+    biasPlotSelect: document.getElementById("biasPlotSelect"),
+    diagnosticTreatment: document.getElementById("diagnosticTreatment"),
+    diagQ: document.getElementById("diagQ"),
+    diagQp: document.getElementById("diagQp"),
+    diagDf: document.getElementById("diagDf"),
+    diagI2: document.getElementById("diagI2"),
+    diagDispersion: document.getElementById("diagDispersion"),
+    diagTau2: document.getElementById("diagTau2"),
+    diagH2: document.getElementById("diagH2"),
+    diagRmse: document.getElementById("diagRmse"),
+    diagR2: document.getElementById("diagR2"),
+    diagIncQ: document.getElementById("diagIncQ"),
+    diagIncDf: document.getElementById("diagIncDf"),
+    diagIncP: document.getElementById("diagIncP"),
+    diagDesignQ: document.getElementById("diagDesignQ"),
+    diagDesignDf: document.getElementById("diagDesignDf"),
+    diagDesignP: document.getElementById("diagDesignP"),
+    diagCovBeta: document.getElementById("diagCovBeta"),
+    diagCovMean: document.getElementById("diagCovMean"),
+    diagDensity: document.getElementById("diagDensity"),
+    diagComponents: document.getElementById("diagComponents"),
+    diagMeanDegree: document.getElementById("diagMeanDegree"),
+    diagLoopCount: document.getElementById("diagLoopCount"),
+    diagLoopMax: document.getElementById("diagLoopMax"),
+    diagLoopQ: document.getElementById("diagLoopQ"),
+    diagLoopP: document.getElementById("diagLoopP"),
+    diagTreatAic: document.getElementById("diagTreatAic"),
+    diagTreatAicc: document.getElementById("diagTreatAicc"),
+    diagTreatBic: document.getElementById("diagTreatBic"),
+    diagTreatQ: document.getElementById("diagTreatQ"),
+    diagTreatQp: document.getElementById("diagTreatQp"),
+    diagTreatDf: document.getElementById("diagTreatDf"),
+    diagTreatDispersion: document.getElementById("diagTreatDispersion"),
+    diagTreatLogLik: document.getElementById("diagTreatLogLik"),
+    diagTreatTau2: document.getElementById("diagTreatTau2"),
+    diagTreatPiLow: document.getElementById("diagTreatPiLow"),
+    diagTreatPiHigh: document.getElementById("diagTreatPiHigh"),
+    diagTreatEgger: document.getElementById("diagTreatEgger"),
+    diagTreatEggerP: document.getElementById("diagTreatEggerP"),
+    diagTreatBegg: document.getElementById("diagTreatBegg"),
+    diagTreatBeggP: document.getElementById("diagTreatBeggP"),
+    diagTreatInfluence: document.getElementById("diagTreatInfluence"),
+    diagTreatRmse: document.getElementById("diagTreatRmse"),
+    diagTreatR2: document.getElementById("diagTreatR2"),
+    diagTreatMaxStdResid: document.getElementById("diagTreatMaxStdResid"),
+    diagTreatModelDetail: document.getElementById("diagTreatModelDetail"),
+    diagNodeDirect: document.getElementById("diagNodeDirect"),
+    diagNodeIndirect: document.getElementById("diagNodeIndirect"),
+    diagNodeDiff: document.getElementById("diagNodeDiff"),
+    diagNodeP: document.getElementById("diagNodeP"),
+    diagTrimFill: document.getElementById("diagTrimFill"),
+    diagFunnelContours: document.getElementById("diagFunnelContours"),
+    diagHkScale: document.getElementById("diagHkScale"),
+    diagRobustSe: document.getElementById("diagRobustSe"),
+    diagCopasTarget: document.getElementById("diagCopasTarget"),
+    diagModelWeights: document.getElementById("diagModelWeights"),
+    qualityRows: document.getElementById("qualityRows"),
+    qualityUsed: document.getElementById("qualityUsed"),
+    qualityStudies: document.getElementById("qualityStudies"),
+    qualityTreatments: document.getElementById("qualityTreatments"),
+    qualityMissingSe: document.getElementById("qualityMissingSe"),
+    qualityMissingBaseline: document.getElementById("qualityMissingBaseline"),
+    qualityWarnings: document.getElementById("qualityWarnings")
+  };
+
+  function setStatus(text, tone = "") {
+    dom.status.textContent = text;
+    dom.status.style.color = tone === "warn" ? "#ffb703" : "";
+  }
+
+  const MODEL_LABELS = {
+    auto: "Auto",
+    emax: "Emax",
+    hill: "Sigmoid Emax",
+    log_linear: "Log-linear",
+    rcs: "RCS spline",
+    fp: "Fractional poly"
+  };
+
+  function makeRng(seed) {
+    let value = seed % 2147483647;
+    if (value <= 0) value += 2147483646;
+    return () => {
+      value = (value * 16807) % 2147483647;
+      return (value - 1) / 2147483646;
+    };
+  }
+
+  function quantile(values, q) {
+    if (!values.length) return NaN;
+    const sorted = [...values].sort((a, b) => a - b);
+    const pos = (sorted.length - 1) * q;
+    const base = Math.floor(pos);
+    const rest = pos - base;
+    if (sorted[base + 1] !== undefined) {
+      return sorted[base] + rest * (sorted[base + 1] - sorted[base]);
+    }
+    return sorted[base];
+  }
+
+  function computeAIC(sse, n, k) {
+    if (!Number.isFinite(sse) || sse <= 0 || n <= 0) return NaN;
+    return n * Math.log(sse / n) + 2 * k;
+  }
+
+  function computeAICc(aic, n, k) {
+    if (!Number.isFinite(aic)) return NaN;
+    if (n <= k + 1) return aic;
+    return aic + (2 * k * (k + 1)) / (n - k - 1);
+  }
+
+  function computeWeightedStats(points, predictFn, k) {
+    const mean = weightedMean(points, "value");
+    let sse = 0;
+    let sst = 0;
+    points.forEach(point => {
+      const pred = predictFn(point.dose);
+      const resid = point.value - pred;
+      sse += point.weight * resid * resid;
+      const dev = point.value - mean;
+      sst += point.weight * dev * dev;
+    });
+    const n = points.length;
+    const rmse = Math.sqrt(sse / Math.max(n, 1));
+    const r2 = sst ? 1 - sse / sst : NaN;
+    const aic = computeAIC(sse, n, k);
+    const aicc = computeAICc(aic, n, k);
+    const bic = Number.isFinite(sse) && sse > 0 && n > 0 ? n * Math.log(sse / n) + k * Math.log(n) : NaN;
+    const df = n - k;
+    const sigma2 = sse / Math.max(n, 1);
+    const logLik = sigma2 > 0 ? -0.5 * n * (Math.log(2 * Math.PI * sigma2) + 1) : NaN;
+    return { sse, rmse, r2, aic, aicc, bic, df, logLik };
+  }
+
+  async function loadWasm() {
+    const base64Bytes = () => Uint8Array.from(atob(WASM_BASE64), c => c.charCodeAt(0));
+    try {
+      const response = await fetch("app.wasm", { cache: "no-store" });
+      if (response.ok) {
+        if (WebAssembly.instantiateStreaming) {
+          try {
+            const { instance } = await WebAssembly.instantiateStreaming(response, {});
+            return instance.exports;
+          } catch (_) {
+            const buffer = await response.arrayBuffer();
+            const { instance } = await WebAssembly.instantiate(buffer, {});
+            return instance.exports;
+          }
+        }
+        const buffer = await response.arrayBuffer();
+        const { instance } = await WebAssembly.instantiate(buffer, {});
+        return instance.exports;
+      }
+    } catch (_) {
+      // Fallback to embedded bytes for file:// usage.
+    }
+    const { instance } = await WebAssembly.instantiate(base64Bytes(), {});
+    return instance.exports;
+  }
+
+  function detectDelimiter(text) {
+    const line = text.split(/\r?\n/).find(l => l.trim().length);
+    if (!line) return ",";
+    const comma = (line.match(/,/g) || []).length;
+    const tab = (line.match(/\t/g) || []).length;
+    return tab > comma ? "\t" : ",";
+  }
+
+  function parseRows(text, delimiter) {
+    const rows = [];
+    let row = [];
+    let field = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < text.length; i += 1) {
+      const char = text[i];
+      if (inQuotes) {
+        if (char === '"') {
+          if (text[i + 1] === '"') {
+            field += '"';
+            i += 1;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          field += char;
+        }
+      } else {
+        if (char === '"') {
+          inQuotes = true;
+        } else if (char === delimiter) {
+          row.push(field);
+          field = "";
+        } else if (char === "\n") {
+          row.push(field);
+          rows.push(row);
+          row = [];
+          field = "";
+        } else if (char === "\r") {
+          // skip
+        } else {
+          field += char;
+        }
+      }
+    }
+
+    if (field.length || row.length) {
+      row.push(field);
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function normalizeHeader(value) {
+    return value.trim().toLowerCase().replace(/\s+/g, "_");
+  }
+
+  function mapHeaders(headers) {
+    const map = { study: -1, treatment: -1, dose: -1, effect: -1, se: -1, covariate: -1 };
+    const alias = {
+      study: ["study", "trial", "study_id", "trial_id"],
+      treatment: ["treatment", "arm", "drug", "tx"],
+      dose: ["dose", "dosage"],
+      effect: ["effect", "response", "outcome", "y"],
+      se: ["se", "stderr", "std_err", "std_error", "sd", "sigma"],
+      covariate: ["covariate", "moderator", "mod", "x", "z", "cov"]
+    };
+
+    headers.forEach((header, index) => {
+      Object.keys(alias).forEach(key => {
+        if (alias[key].includes(header)) {
+          map[key] = index;
+        }
+      });
+    });
+
+    return map;
+  }
+
+  function parseCSV(text) {
+    const trimmed = text.trim();
+    if (!trimmed) return [];
+    const delimiter = detectDelimiter(trimmed);
+    const rows = parseRows(trimmed, delimiter).filter(row => row.some(cell => cell.trim().length));
+    if (rows.length < 2) return [];
+
+    const headers = rows[0].map(normalizeHeader);
+    const map = mapHeaders(headers);
+    if (map.treatment === -1 || map.dose === -1 || map.effect === -1) return [];
+
+    const data = [];
+    for (let i = 1; i < rows.length; i += 1) {
+      const row = rows[i];
+      const treatment = (row[map.treatment] || "").trim();
+      const study = map.study !== -1 ? (row[map.study] || "").trim() : `Study-${i}`;
+      const dose = Number.parseFloat(row[map.dose]);
+      const effect = Number.parseFloat(row[map.effect]);
+      const se = map.se !== -1 ? Number.parseFloat(row[map.se]) : NaN;
+      const covariate = map.covariate !== -1 ? Number.parseFloat(row[map.covariate]) : NaN;
+
+      if (!treatment || !Number.isFinite(dose) || !Number.isFinite(effect)) continue;
+      const baseWeight = Number.isFinite(se) && se > 0 ? 1 / (se * se) : 1;
+      data.push({
+        study,
+        treatment,
+        dose,
+        effect,
+        se,
+        covariate,
+        baseWeight,
+        weight: baseWeight,
+        value: effect
+      });
+    }
+    return data;
+  }
+
+  function groupByTreatment(data) {
+    const map = new Map();
+    data.forEach(row => {
+      if (!map.has(row.treatment)) map.set(row.treatment, []);
+      map.get(row.treatment).push(row);
+    });
+    return map;
+  }
+
+  function weightedMean(points, key = "value") {
+    let sum = 0;
+    let weightSum = 0;
+    points.forEach(point => {
+      sum += point[key] * point.weight;
+      weightSum += point.weight;
+    });
+    return weightSum ? sum / weightSum : 0;
+  }
+
+  function prepareData(rawData, options = {}) {
+    const { multiArmAdjust = false } = options;
+    const summary = {
+      rowsTotal: rawData.length,
+      rowsUsed: 0,
+      studiesTotal: 0,
+      treatmentsTotal: 0,
+      missingSe: 0,
+      invalidSe: 0,
+      missingStudyOffsets: 0,
+      excludedRows: 0,
+      duplicateRows: 0,
+      negativeDose: 0
+    };
+    const warnings = [];
+    const studySet = new Set();
+    const treatmentSet = new Set();
+    const duplicateCheck = new Set();
+    const studyArms = new Map();
+
+    rawData.forEach(row => {
+      studySet.add(row.study);
+      treatmentSet.add(row.treatment);
+      if (!studyArms.has(row.study)) {
+        studyArms.set(row.study, new Set());
+      }
+      studyArms.get(row.study).add(row.treatment);
+      if (!Number.isFinite(row.se)) summary.missingSe += 1;
+      if (Number.isFinite(row.se) && row.se <= 0) summary.invalidSe += 1;
+      if (row.dose < 0) summary.negativeDose += 1;
+      const key = `${row.study}|${row.treatment}|${row.dose}`;
+      if (duplicateCheck.has(key)) summary.duplicateRows += 1;
+      duplicateCheck.add(key);
+    });
+
+    summary.studiesTotal = studySet.size;
+    summary.treatmentsTotal = treatmentSet.size;
+
+    const armCounts = new Map();
+    studyArms.forEach((arms, study) => {
+      armCounts.set(study, Math.max(1, arms.size));
+    });
+
+    const data = [];
+    rawData.forEach(row => {
+      if (row.dose < 0) {
+        summary.excludedRows += 1;
+        return;
+      }
+      const baseWeight = Number.isFinite(row.baseWeight) ? row.baseWeight : (Number.isFinite(row.se) && row.se > 0 ? 1 / (row.se * row.se) : 1);
+      const armCount = armCounts.get(row.study) || 1;
+      const adjustedWeight = multiArmAdjust ? baseWeight / armCount : baseWeight;
+      data.push({ ...row, baseWeight: adjustedWeight, weight: adjustedWeight, value: row.effect });
+    });
+
+    summary.rowsUsed = data.length;
+
+    if (summary.invalidSe) warnings.push(`Found ${summary.invalidSe} non-positive SE values; weights default to 1.`);
+    if (summary.missingSe) warnings.push(`Missing SE for ${summary.missingSe} rows; weights default to 1.`);
+    if (summary.negativeDose) warnings.push(`Dropped ${summary.negativeDose} rows with negative dose.`);
+    if (summary.duplicateRows) warnings.push(`Detected ${summary.duplicateRows} duplicate study/treatment/dose rows.`);
+    if (!data.length) warnings.push("No usable rows after filtering.");
+
+    return {
+      data,
+      validation: { summary, warnings }
+    };
+  }
+
+  function renderDataQuality(validation) {
+    const { summary, warnings } = validation;
+    if (!dom.qualityRows) return;
+    dom.qualityRows.textContent = summary.rowsTotal ?? "-";
+    dom.qualityUsed.textContent = summary.rowsUsed ?? "-";
+    dom.qualityStudies.textContent = summary.studiesTotal ?? "-";
+    dom.qualityTreatments.textContent = summary.treatmentsTotal ?? "-";
+    dom.qualityMissingSe.textContent = summary.missingSe ?? "-";
+    dom.qualityMissingBaseline.textContent = summary.missingStudyOffsets ?? "-";
+    if (warnings.length) {
+      dom.qualityWarnings.textContent = warnings.join(" ");
+      dom.qualityWarnings.style.color = "#ffb703";
+    } else {
+      dom.qualityWarnings.textContent = "No warnings detected.";
+      dom.qualityWarnings.style.color = "rgba(244, 247, 255, 0.65)";
+    }
+  }
+
+  function computeStudyOffsets(baseData, fits, options = {}) {
+    const { useCovariate = false, covariateBeta = NaN, covariateMean = NaN } = options;
+    const studyAgg = new Map();
+    baseData.forEach(row => {
+      const fit = fits[row.treatment];
+      if (!fit) return;
+      const pred = predictModel(fit, row.dose);
+      const covAdj = useCovariate && Number.isFinite(covariateBeta) && Number.isFinite(row.covariate)
+        ? covariateBeta * (row.covariate - covariateMean)
+        : 0;
+      const weight = Number.isFinite(row.baseWeight) ? row.baseWeight : row.weight;
+      if (!studyAgg.has(row.study)) {
+        studyAgg.set(row.study, { sum: 0, weight: 0 });
+      }
+      const agg = studyAgg.get(row.study);
+      agg.sum += weight * (row.effect - covAdj - pred);
+      agg.weight += weight;
+    });
+
+    const offsets = new Map();
+    let missingStudies = 0;
+    const studySet = new Set(baseData.map(row => row.study));
+    studySet.forEach(study => {
+      const agg = studyAgg.get(study);
+      if (agg && agg.weight > 0) {
+        offsets.set(study, agg.sum / agg.weight);
+      } else {
+        missingStudies += 1;
+      }
+    });
+
+    return { offsets, missingStudies };
+  }
+
+  function applyStudyOffsets(baseData, offsets, options = {}) {
+    const {
+      randomEffects = false,
+      tau2ByTreatment = {},
+      useCovariate = false,
+      covariateBeta = NaN,
+      covariateMean = NaN
+    } = options;
+    return baseData.map(row => {
+      const offset = offsets.get(row.study) || 0;
+      const covAdj = useCovariate && Number.isFinite(covariateBeta) && Number.isFinite(row.covariate)
+        ? covariateBeta * (row.covariate - covariateMean)
+        : 0;
+      const baseWeight = Number.isFinite(row.baseWeight) ? row.baseWeight : row.weight;
+      const baseVar = baseWeight > 0 ? 1 / baseWeight : 1;
+      const tau2 = randomEffects ? (tau2ByTreatment[row.treatment] ?? 0) : 0;
+      const weight = randomEffects ? (baseVar + tau2 > 0 ? 1 / (baseVar + tau2) : baseWeight) : baseWeight;
+      return {
+        ...row,
+        value: row.effect - offset - covAdj,
+        studyOffset: offset,
+        weight,
+        tau2
+      };
+    });
+  }
+
+  function computeCovariateEffect(baseData, fits, offsets) {
+    const rows = baseData.filter(row => Number.isFinite(row.covariate) && fits[row.treatment]);
+    if (rows.length < 3) return { beta: NaN, mean: NaN };
+    let weightSum = 0;
+    let covSum = 0;
+    rows.forEach(row => {
+      const weight = Number.isFinite(row.baseWeight) ? row.baseWeight : row.weight;
+      weightSum += weight;
+      covSum += weight * row.covariate;
+    });
+    const mean = weightSum ? covSum / weightSum : NaN;
+    let num = 0;
+    let den = 0;
+    rows.forEach(row => {
+      const weight = Number.isFinite(row.baseWeight) ? row.baseWeight : row.weight;
+      const offset = offsets.get(row.study) || 0;
+      const pred = predictModel(fits[row.treatment], row.dose);
+      const resid = row.effect - offset - pred;
+      const x = row.covariate - mean;
+      num += weight * x * resid;
+      den += weight * x * x;
+    });
+    const beta = den ? num / den : 0;
+    return { beta, mean };
+  }
+
+  function computeTau2ByTreatment(baseData, fits, offsets, options = {}) {
+    const {
+      useCovariate = false,
+      covariateBeta = NaN,
+      covariateMean = NaN,
+      tau2Method = "dl"
+    } = options;
+    const agg = new Map();
+    baseData.forEach(row => {
+      const fit = fits[row.treatment];
+      if (!fit) return;
+      const offset = offsets.get(row.study) || 0;
+      const covAdj = useCovariate && Number.isFinite(covariateBeta) && Number.isFinite(row.covariate)
+        ? covariateBeta * (row.covariate - covariateMean)
+        : 0;
+      const resid = row.effect - offset - covAdj - predictModel(fit, row.dose);
+      const weight = Number.isFinite(row.baseWeight) ? row.baseWeight : row.weight;
+      if (!Number.isFinite(weight) || weight <= 0) return;
+      const variance = weight > 0 ? 1 / weight : 1;
+      if (!agg.has(row.treatment)) {
+        agg.set(row.treatment, { resids: [], vars: [], weights: [], n: 0 });
+      }
+      const entry = agg.get(row.treatment);
+      entry.resids.push(resid);
+      entry.vars.push(variance);
+      entry.weights.push(weight);
+      entry.n += 1;
+    });
+
+    const computePauleMandel = (vars, resids, df) => {
+      if (df <= 0 || !vars.length) return 0;
+      const qAt = tau2 => {
+        let sum = 0;
+        for (let i = 0; i < vars.length; i += 1) {
+          const w = 1 / (vars[i] + tau2);
+          sum += w * resids[i] * resids[i];
+        }
+        return sum;
+      };
+      const q0 = qAt(0);
+      if (!Number.isFinite(q0)) return 0;
+      if (q0 <= df) return 0;
+      let low = 0;
+      let high = 1;
+      while (qAt(high) > df && high < 1e6) {
+        high *= 2;
+      }
+      if (qAt(high) > df) return high;
+      for (let i = 0; i < 40; i += 1) {
+        const mid = (low + high) / 2;
+        if (qAt(mid) > df) {
+          low = mid;
+        } else {
+          high = mid;
+        }
+      }
+      return high;
+    };
+
+    const tau2ByTreatment = {};
+    let totalTau2 = 0;
+    let totalN = 0;
+    let totalQ = 0;
+    let totalDf = 0;
+    agg.forEach((entry, treatment) => {
+      const df = Number.isFinite(fits[treatment]?.df) ? fits[treatment].df : Math.max(entry.n - 1, 0);
+      let q = 0;
+      let wsum = 0;
+      let wsum2 = 0;
+      for (let i = 0; i < entry.resids.length; i += 1) {
+        const w = entry.weights[i];
+        q += w * entry.resids[i] * entry.resids[i];
+        wsum += w;
+        wsum2 += w * w;
+      }
+      totalQ += q;
+      totalDf += df;
+      let tau2 = 0;
+      if (tau2Method === "pm") {
+        tau2 = computePauleMandel(entry.vars, entry.resids, df);
+      } else {
+        const c = wsum - (wsum2 / (wsum || 1));
+        tau2 = c > 0 ? Math.max(0, (q - df) / c) : 0;
+      }
+      tau2ByTreatment[treatment] = tau2;
+      totalTau2 += tau2 * entry.n;
+      totalN += entry.n;
+    });
+    const globalTau2 = totalN ? totalTau2 / totalN : NaN;
+    const i2 = totalQ > totalDf ? (totalQ - totalDf) / totalQ : 0;
+    const h2 = totalDf ? totalQ / totalDf : NaN;
+    return { tau2ByTreatment, globalTau2, i2, h2, totalQ, totalDf };
+  }
+
+  function fitNetwork(baseData, modelChoice, options = {}, iterations = 3) {
+    const { randomEffects = false, useCovariate = false, tau2Method = "dl" } = options;
+    let adjusted = baseData.map(row => ({ ...row, value: row.effect }));
+    let fits = {};
+    let treatments = [];
+    let candidateFits = {};
+    let offsets = new Map();
+    let missingStudies = 0;
+    let covariateBeta = NaN;
+    let covariateMean = NaN;
+    let tau2ByTreatment = {};
+    let globalTau2 = NaN;
+    let globalI2 = NaN;
+    let globalH2 = NaN;
+
+    for (let iter = 0; iter < iterations; iter += 1) {
+      const fitResults = fitAllTreatments(adjusted, modelChoice);
+      fits = fitResults.fits;
+      treatments = fitResults.treatments;
+      candidateFits = fitResults.candidates;
+
+      const offsetResult = computeStudyOffsets(baseData, fits, { useCovariate, covariateBeta, covariateMean });
+      offsets = offsetResult.offsets;
+      missingStudies = offsetResult.missingStudies;
+
+      if (useCovariate) {
+        const covResult = computeCovariateEffect(baseData, fits, offsets);
+        covariateBeta = covResult.beta;
+        covariateMean = covResult.mean;
+      } else {
+        covariateBeta = NaN;
+        covariateMean = NaN;
+      }
+
+      const tau2Result = computeTau2ByTreatment(baseData, fits, offsets, {
+        useCovariate,
+        covariateBeta,
+        covariateMean,
+        tau2Method
+      });
+      tau2ByTreatment = tau2Result.tau2ByTreatment;
+      globalTau2 = tau2Result.globalTau2;
+      globalI2 = tau2Result.i2;
+      globalH2 = tau2Result.h2;
+
+      adjusted = applyStudyOffsets(baseData, offsets, {
+        randomEffects,
+        tau2ByTreatment,
+        useCovariate,
+        covariateBeta,
+        covariateMean
+      });
+    }
+
+    return {
+      fits,
+      treatments,
+      candidates: candidateFits,
+      adjustedData: adjusted,
+      offsets,
+      missingStudies,
+      covariateBeta,
+      covariateMean,
+      tau2ByTreatment,
+      globalTau2,
+      globalI2,
+      globalH2
+    };
+  }
+
+  function createAllocator(memory) {
+    let heapPtr = 0;
+    function align(value, alignment) {
+      return Math.ceil(value / alignment) * alignment;
+    }
+
+    function ensure(bytesNeeded) {
+      const current = memory.buffer.byteLength;
+      if (bytesNeeded <= current) return;
+      const pagesNeeded = Math.ceil((bytesNeeded - current) / 65536);
+      memory.grow(pagesNeeded);
+    }
+
+    return {
+      reset() {
+        heapPtr = 0;
+      },
+      writeF64Array(values) {
+        heapPtr = align(heapPtr, 8);
+        const bytesNeeded = heapPtr + values.length * 8;
+        ensure(bytesNeeded);
+        const view = new Float64Array(memory.buffer, heapPtr, values.length);
+        view.set(values);
+        const ptr = heapPtr;
+        heapPtr = bytesNeeded;
+        return ptr;
+      }
+    };
+  }
+
+  function solveLinearSystem(matrix, vector) {
+    const n = matrix.length;
+    const a = matrix.map(row => row.slice());
+    const b = vector.slice();
+    for (let i = 0; i < n; i += 1) {
+      let maxRow = i;
+      let max = Math.abs(a[i][i]);
+      for (let r = i + 1; r < n; r += 1) {
+        const value = Math.abs(a[r][i]);
+        if (value > max) {
+          max = value;
+          maxRow = r;
+        }
+      }
+      if (!Number.isFinite(max) || max < 1e-12) return null;
+      if (maxRow !== i) {
+        const tempRow = a[i];
+        a[i] = a[maxRow];
+        a[maxRow] = tempRow;
+        const tempVal = b[i];
+        b[i] = b[maxRow];
+        b[maxRow] = tempVal;
+      }
+      const pivot = a[i][i];
+      for (let c = i; c < n; c += 1) {
+        a[i][c] /= pivot;
+      }
+      b[i] /= pivot;
+      for (let r = 0; r < n; r += 1) {
+        if (r === i) continue;
+        const factor = a[r][i];
+        for (let c = i; c < n; c += 1) {
+          a[r][c] -= factor * a[i][c];
+        }
+        b[r] -= factor * b[i];
+      }
+    }
+    return b;
+  }
+
+  function weightedLeastSquares(design, y, weights) {
+    const n = design.length;
+    const p = design[0]?.length || 0;
+    if (!n || !p) return null;
+    const xtwx = Array.from({ length: p }, () => Array(p).fill(0));
+    const xtwy = Array(p).fill(0);
+    for (let i = 0; i < n; i += 1) {
+      const row = design[i];
+      const w = weights[i];
+      for (let j = 0; j < p; j += 1) {
+        const xj = row[j];
+        xtwy[j] += w * xj * y[i];
+        for (let k = 0; k < p; k += 1) {
+          xtwx[j][k] += w * xj * row[k];
+        }
+      }
+    }
+    const betas = solveLinearSystem(xtwx, xtwy);
+    if (!betas) return null;
+    let sse = 0;
+    for (let i = 0; i < n; i += 1) {
+      const row = design[i];
+      let pred = 0;
+      for (let j = 0; j < p; j += 1) {
+        pred += betas[j] * row[j];
+      }
+      const resid = y[i] - pred;
+      sse += weights[i] * resid * resid;
+    }
+    return { betas, sse };
+  }
+
+  function selectKnots(doses, count) {
+    const sorted = doses.slice().sort((a, b) => a - b);
+    const unique = Array.from(new Set(sorted));
+    if (unique.length < 3) return [];
+    const k = Math.min(count, unique.length);
+    const probs = k === 3 ? [0.1, 0.5, 0.9] : [0.05, 0.35, 0.65, 0.95];
+    const knots = probs.map(p => sorted[Math.floor(p * (sorted.length - 1))]);
+    return Array.from(new Set(knots)).sort((a, b) => a - b);
+  }
+
+  function buildRcsBasis(dose, knots, includeIntercept) {
+    const k = knots.length;
+    if (k < 3) return [];
+    const last = knots[k - 1];
+    const lastMinus = knots[k - 2];
+    const denom = last - lastMinus || 1;
+    const terms = [];
+    if (includeIntercept) terms.push(1);
+    terms.push(dose);
+    for (let j = 1; j < k - 1; j += 1) {
+      const knot = knots[j];
+      const term = Math.pow(Math.max(dose - knot, 0), 3);
+      const termLastMinus = Math.pow(Math.max(dose - lastMinus, 0), 3);
+      const termLast = Math.pow(Math.max(dose - last, 0), 3);
+      const adj = term - termLastMinus * ((last - knot) / denom) + termLast * ((lastMinus - knot) / denom);
+      terms.push(adj);
+    }
+    return terms;
+  }
+
+  function fitRcs(points, options) {
+    const doses = points.map(p => p.dose);
+    const values = points.map(p => p.value);
+    const weights = points.map(p => p.weight);
+    const knotCount = Math.min(4, new Set(doses).size);
+    const knots = selectKnots(doses, knotCount);
+    if (knots.length < 3) return null;
+    const includeIntercept = options.freeBaseline;
+    const design = points.map(point => buildRcsBasis(point.dose, knots, includeIntercept));
+    const result = weightedLeastSquares(design, values, weights);
+    if (!result) return null;
+    const knotLabel = knots.map(knot => formatNumber(knot)).join("/");
+    return {
+      betas: result.betas,
+      knots,
+      includeIntercept,
+      sse: result.sse,
+      n: points.length,
+      k: result.betas.length,
+      modelDetail: `RCS k=${knots.length} [${knotLabel}]`
+    };
+  }
+
+  function predictRcs(fit, dose) {
+    const basis = buildRcsBasis(dose, fit.knots, fit.includeIntercept);
+    let pred = 0;
+    for (let i = 0; i < fit.betas.length; i += 1) {
+      pred += fit.betas[i] * basis[i];
+    }
+    return pred;
+  }
+
+  function buildFpTerm(x, power) {
+    if (power === 0) return Math.log(x);
+    return Math.pow(x, power);
+  }
+
+  function fitFracPoly(points, options) {
+    const doses = points.map(p => p.dose);
+    const values = points.map(p => p.value);
+    const weights = points.map(p => p.weight);
+    const minPosDose = Math.min(...doses.filter(d => d > 0));
+    const maxDose = Math.max(...doses);
+    const shift = Number.isFinite(minPosDose) ? minPosDose * 0.5 : Math.max(1, maxDose * 0.1);
+    const x = doses.map(d => d + shift);
+    const powers = [-2, -1, -0.5, 0, 0.5, 1, 2, 3];
+    let best = null;
+
+    const includeIntercept = options.freeBaseline;
+    const tryCandidate = (p1, p2, isDouble) => {
+      const design = [];
+      for (let i = 0; i < x.length; i += 1) {
+        const row = [];
+        if (includeIntercept) row.push(1);
+        const term1 = buildFpTerm(x[i], p1);
+        row.push(term1);
+        if (isDouble) {
+          const term2 = p1 === p2 ? term1 * Math.log(x[i]) : buildFpTerm(x[i], p2);
+          row.push(term2);
+        }
+        design.push(row);
+      }
+      const result = weightedLeastSquares(design, values, weights);
+      if (!result) return;
+      const fit = {
+        betas: result.betas,
+        powers: [p1, isDouble ? p2 : null].filter(v => v !== null),
+        shift,
+        includeIntercept,
+        sse: result.sse,
+        n: points.length,
+        k: result.betas.length,
+        fpType: isDouble ? "fp2" : "fp1",
+        modelDetail: isDouble ? `FP(${p1},${p2})` : `FP(${p1})`
+      };
+      const finalized = finalizeFit(points, fit, "fp");
+      if (!finalized) return;
+      if (!best || (Number.isFinite(finalized.aicc) && finalized.aicc < best.aicc)) {
+        best = finalized;
+      }
+    };
+
+    powers.forEach(p1 => {
+      tryCandidate(p1, null, false);
+    });
+    powers.forEach(p1 => {
+      powers.forEach(p2 => {
+        if (p2 < p1) return;
+        tryCandidate(p1, p2, true);
+      });
+    });
+    return best;
+  }
+
+  function predictFP(fit, dose) {
+    const x = dose + fit.shift;
+    const terms = [];
+    if (fit.includeIntercept) terms.push(1);
+    const term1 = buildFpTerm(x, fit.powers[0]);
+    terms.push(term1);
+    if (fit.powers.length > 1) {
+      const p2 = fit.powers[1];
+      const term2 = p2 === fit.powers[0] ? term1 * Math.log(x) : buildFpTerm(x, p2);
+      terms.push(term2);
+    }
+    let pred = 0;
+    for (let i = 0; i < fit.betas.length; i += 1) {
+      pred += fit.betas[i] * terms[i];
+    }
+    return pred;
+  }
+
+  function fitEmax(points, options) {
+    const doses = points.map(p => p.dose);
+    const effects = points.map(p => p.value);
+    const weights = points.map(p => p.weight);
+    const n = points.length;
+
+    const minDose = Math.min(...doses);
+    const maxDose = Math.max(...doses);
+    const minPosDose = Math.min(...doses.filter(d => d > 0));
+    const safeMinPos = Number.isFinite(minPosDose) ? minPosDose : Math.max(maxDose, 1);
+
+    const minEffect = Math.min(...effects);
+    const maxEffect = Math.max(...effects);
+    const effRange = (maxEffect - minEffect) || 1;
+
+    const sorted = [...points].sort((a, b) => a.dose - b.dose);
+    const lowSlice = sorted.slice(0, Math.max(1, Math.floor(n * 0.2)));
+    const highSlice = sorted.slice(Math.max(1, Math.floor(n * 0.8)));
+
+    const baseE0 = options.freeBaseline ? weightedMean(lowSlice, "value") : 0;
+    const highMean = weightedMean(highSlice);
+    let baseEmax = highMean - baseE0;
+    if (!Number.isFinite(baseEmax) || baseEmax === 0) baseEmax = effRange * 0.8;
+
+    const logMin = Math.log10(Math.max(safeMinPos * 0.2, 0.001));
+    const logMax = Math.log10(Math.max(maxDose * 2, safeMinPos * 0.6));
+
+    const allocator = createAllocator(state.wasm.memory);
+    allocator.reset();
+    const ptrDose = allocator.writeF64Array(doses);
+    const ptrEff = allocator.writeF64Array(effects);
+    const ptrW = allocator.writeF64Array(weights);
+
+    const evaluate = (e0, emax, ed50) => state.wasm.sse_emax(ptrDose, ptrEff, ptrW, n, e0, emax, ed50);
+
+    let best = {
+      e0: baseE0,
+      emax: baseEmax,
+      ed50: Math.pow(10, (logMin + logMax) / 2),
+      sse: Number.POSITIVE_INFINITY
+    };
+
+    const trials = 160 + Math.min(240, n * 40);
+    const e0Range = effRange;
+    const emaxRange = effRange * 1.5;
+
+    for (let i = 0; i < trials; i += 1) {
+      const e0 = options.freeBaseline ? baseE0 + (Math.random() - 0.5) * e0Range : 0;
+      const emax = baseEmax + (Math.random() - 0.5) * emaxRange;
+      const ed50 = Math.pow(10, logMin + Math.random() * (logMax - logMin));
+      const sse = evaluate(e0, emax, ed50);
+      if (sse < best.sse) {
+        best = { e0, emax, ed50, sse };
+      }
+    }
+
+    let stepE0 = e0Range * 0.25;
+    let stepEmax = emaxRange * 0.25;
+    let stepEd50 = (Math.pow(10, logMax) - Math.pow(10, logMin)) * 0.25;
+
+    for (let i = 0; i < 80; i += 1) {
+      const e0 = options.freeBaseline ? best.e0 + (Math.random() - 0.5) * stepE0 : 0;
+      const emax = best.emax + (Math.random() - 0.5) * stepEmax;
+      const ed50 = Math.max(0.0001, best.ed50 + (Math.random() - 0.5) * stepEd50);
+      const sse = evaluate(e0, emax, ed50);
+      if (sse < best.sse) {
+        best = { e0, emax, ed50, sse };
+      }
+      if (i % 10 === 9) {
+        stepE0 *= 0.7;
+        stepEmax *= 0.7;
+        stepEd50 *= 0.7;
+      }
+    }
+
+    const rmse = Math.sqrt(best.sse / Math.max(n, 1));
+    return { ...best, rmse, n };
+  }
+
+  function predictEmax(fit, dose) {
+    return state.wasm.predict_emax(dose, fit.e0, fit.emax, fit.ed50);
+  }
+
+  function predictHill(fit, dose) {
+    const pow = Math.pow(dose, fit.hill);
+    const denom = Math.pow(fit.ed50, fit.hill) + pow;
+    if (!Number.isFinite(denom) || denom === 0) return fit.e0;
+    return fit.e0 + fit.emax * (pow / denom);
+  }
+
+  function predictLogLinear(fit, dose) {
+    return fit.e0 + fit.slope * Math.log(dose + fit.shift);
+  }
+
+  function predictModel(fit, dose) {
+    if (!fit) return 0;
+    if (fit.model === "hill") return predictHill(fit, dose);
+    if (fit.model === "log_linear") return predictLogLinear(fit, dose);
+    if (fit.model === "rcs") return predictRcs(fit, dose);
+    if (fit.model === "fp") return predictFP(fit, dose);
+    return predictEmax(fit, dose);
+  }
+
+  function fitHill(points, options) {
+    const doses = points.map(p => p.dose);
+    const values = points.map(p => p.value);
+    const weights = points.map(p => p.weight);
+    const n = points.length;
+
+    const maxDose = Math.max(...doses);
+    const minPosDose = Math.min(...doses.filter(d => d > 0));
+    const safeMinPos = Number.isFinite(minPosDose) ? minPosDose : Math.max(maxDose, 1);
+
+    const minEffect = Math.min(...values);
+    const maxEffect = Math.max(...values);
+    const effRange = (maxEffect - minEffect) || 1;
+
+    const sorted = [...points].sort((a, b) => a.dose - b.dose);
+    const lowSlice = sorted.slice(0, Math.max(1, Math.floor(n * 0.2)));
+    const highSlice = sorted.slice(Math.max(1, Math.floor(n * 0.8)));
+
+    const baseE0 = options.freeBaseline ? weightedMean(lowSlice, "value") : 0;
+    const highMean = weightedMean(highSlice, "value");
+    let baseEmax = highMean - baseE0;
+    if (!Number.isFinite(baseEmax) || baseEmax === 0) baseEmax = effRange * 0.8;
+
+    const logMin = Math.log10(Math.max(safeMinPos * 0.2, 0.001));
+    const logMax = Math.log10(Math.max(maxDose * 2, safeMinPos * 0.6));
+    const hillMin = 0.4;
+    const hillMax = 5.5;
+
+    const evaluate = (e0, emax, ed50, hill) => {
+      if (ed50 <= 0 || hill <= 0) return Number.POSITIVE_INFINITY;
+      let sse = 0;
+      for (let i = 0; i < n; i += 1) {
+        const dose = doses[i];
+        const pow = Math.pow(dose, hill);
+        const denom = Math.pow(ed50, hill) + pow;
+        const pred = denom ? e0 + emax * (pow / denom) : e0;
+        const resid = values[i] - pred;
+        sse += weights[i] * resid * resid;
+      }
+      return sse;
+    };
+
+    let best = {
+      e0: baseE0,
+      emax: baseEmax,
+      ed50: Math.pow(10, (logMin + logMax) / 2),
+      hill: 1.2,
+      sse: Number.POSITIVE_INFINITY
+    };
+
+    const trials = 220 + Math.min(320, n * 60);
+    const e0Range = effRange;
+    const emaxRange = effRange * 1.6;
+
+    for (let i = 0; i < trials; i += 1) {
+      const e0 = options.freeBaseline ? baseE0 + (Math.random() - 0.5) * e0Range : 0;
+      const emax = baseEmax + (Math.random() - 0.5) * emaxRange;
+      const ed50 = Math.pow(10, logMin + Math.random() * (logMax - logMin));
+      const hill = hillMin + Math.random() * (hillMax - hillMin);
+      const sse = evaluate(e0, emax, ed50, hill);
+      if (sse < best.sse) {
+        best = { e0, emax, ed50, hill, sse };
+      }
+    }
+
+    let stepE0 = e0Range * 0.25;
+    let stepEmax = emaxRange * 0.25;
+    let stepEd50 = (Math.pow(10, logMax) - Math.pow(10, logMin)) * 0.25;
+    let stepHill = (hillMax - hillMin) * 0.3;
+
+    for (let i = 0; i < 90; i += 1) {
+      const e0 = options.freeBaseline ? best.e0 + (Math.random() - 0.5) * stepE0 : 0;
+      const emax = best.emax + (Math.random() - 0.5) * stepEmax;
+      const ed50 = Math.max(0.0001, best.ed50 + (Math.random() - 0.5) * stepEd50);
+      const hill = Math.max(0.2, best.hill + (Math.random() - 0.5) * stepHill);
+      const sse = evaluate(e0, emax, ed50, hill);
+      if (sse < best.sse) {
+        best = { e0, emax, ed50, hill, sse };
+      }
+      if (i % 10 === 9) {
+        stepE0 *= 0.7;
+        stepEmax *= 0.7;
+        stepEd50 *= 0.7;
+        stepHill *= 0.75;
+      }
+    }
+
+    return { ...best, n };
+  }
+
+  function fitLogLinear(points, options) {
+    const doses = points.map(p => p.dose);
+    const values = points.map(p => p.value);
+    const weights = points.map(p => p.weight);
+    const n = points.length;
+
+    const minPosDose = Math.min(...doses.filter(d => d > 0));
+    const maxDose = Math.max(...doses);
+    const shift = Number.isFinite(minPosDose) ? minPosDose * 0.5 : Math.max(1, maxDose * 0.1);
+    const x = doses.map(d => Math.log(d + shift));
+
+    const weightSum = weights.reduce((sum, w) => sum + w, 0) || 1;
+    const meanX = x.reduce((sum, v, idx) => sum + v * weights[idx], 0) / weightSum;
+    const meanY = values.reduce((sum, v, idx) => sum + v * weights[idx], 0) / weightSum;
+
+    let slope = 0;
+    let intercept = options.freeBaseline ? meanY : 0;
+    if (options.freeBaseline) {
+      let num = 0;
+      let den = 0;
+      for (let i = 0; i < n; i += 1) {
+        const dx = x[i] - meanX;
+        num += weights[i] * dx * (values[i] - meanY);
+        den += weights[i] * dx * dx;
+      }
+      slope = den ? num / den : 0;
+      intercept = meanY - slope * meanX;
+    } else {
+      let num = 0;
+      let den = 0;
+      for (let i = 0; i < n; i += 1) {
+        num += weights[i] * x[i] * values[i];
+        den += weights[i] * x[i] * x[i];
+      }
+      slope = den ? num / den : 0;
+    }
+
+    let sse = 0;
+    for (let i = 0; i < n; i += 1) {
+      const pred = intercept + slope * x[i];
+      const resid = values[i] - pred;
+      sse += weights[i] * resid * resid;
+    }
+
+    return { e0: intercept, slope, shift, sse, n };
+  }
+
+  function finalizeFit(points, fit, model) {
+    const kMap = {
+      emax: state.freeBaseline ? 3 : 2,
+      hill: state.freeBaseline ? 4 : 3,
+      log_linear: state.freeBaseline ? 2 : 1
+    };
+    const k = Number.isFinite(fit.k) ? fit.k : (kMap[model] || 2);
+    const stats = computeWeightedStats(points, dose => predictModel({ ...fit, model }, dose), k);
+    if (!Number.isFinite(stats.sse)) return null;
+    return { ...fit, ...stats, model, modelLabel: MODEL_LABELS[model] || model };
+  }
+
+  function fitModel(points, model) {
+    if (model === "hill") {
+      return finalizeFit(points, fitHill(points, { freeBaseline: state.freeBaseline }), "hill");
+    }
+    if (model === "log_linear") {
+      return finalizeFit(points, fitLogLinear(points, { freeBaseline: state.freeBaseline }), "log_linear");
+    }
+    if (model === "rcs") {
+      const fit = fitRcs(points, { freeBaseline: state.freeBaseline });
+      return fit ? finalizeFit(points, fit, "rcs") : null;
+    }
+    if (model === "fp") {
+      return fitFracPoly(points, { freeBaseline: state.freeBaseline });
+    }
+    return finalizeFit(points, fitEmax(points, { freeBaseline: state.freeBaseline }), "emax");
+  }
+
+  function selectBestFit(points, modelChoice) {
+    const candidates = modelChoice === "auto"
+      ? ["emax", "hill", "log_linear", "rcs", "fp"]
+      : [modelChoice];
+    const fits = candidates
+      .map(model => fitModel(points, model))
+      .filter(Boolean);
+    if (!fits.length) return null;
+    if (modelChoice !== "auto") return fits[0];
+    return fits.reduce((best, current) => {
+      if (!best) return current;
+      if (!Number.isFinite(current.aicc)) return best;
+      if (!Number.isFinite(best.aicc)) return current;
+      return current.aicc < best.aicc ? current : best;
+    }, null);
+  }
+
+  function fitAllTreatments(data, modelChoice) {
+    const groups = groupByTreatment(data);
+    const treatments = Array.from(groups.keys());
+    const fits = {};
+    const candidates = {};
+    treatments.forEach(treatment => {
+      const points = groups.get(treatment);
+      if (!points || points.length < 2) return;
+      const modelList = modelChoice === "auto"
+        ? ["emax", "hill", "log_linear", "rcs", "fp"]
+        : [modelChoice];
+      const fitList = modelList
+        .map(model => fitModel(points, model))
+        .filter(Boolean);
+      if (!fitList.length) return;
+      let fit = fitList[0];
+      if (modelChoice === "auto") {
+        fit = fitList.reduce((best, current) => {
+          if (!best) return current;
+          if (!Number.isFinite(current.aicc)) return best;
+          if (!Number.isFinite(best.aicc)) return current;
+          return current.aicc < best.aicc ? current : best;
+        }, null);
+      }
+      if (fit) {
+        fits[treatment] = fit;
+        candidates[treatment] = fitList;
+      }
+    });
+    return { fits, treatments, candidates };
+  }
+
+  function computeRange(data) {
+    const doses = data.map(d => d.dose);
+    const effects = data.map(d => d.value);
+    return {
+      minDose: Math.min(...doses),
+      maxDose: Math.max(...doses),
+      minEffect: Math.min(...effects),
+      maxEffect: Math.max(...effects)
+    };
+  }
+
+  function buildEdges(data) {
+    const byStudy = new Map();
+    data.forEach(row => {
+      if (!byStudy.has(row.study)) byStudy.set(row.study, new Set());
+      byStudy.get(row.study).add(row.treatment);
+    });
+    const edges = new Map();
+    byStudy.forEach(treatments => {
+      const list = Array.from(treatments);
+      for (let i = 0; i < list.length; i += 1) {
+        for (let j = i + 1; j < list.length; j += 1) {
+          const a = list[i];
+          const b = list[j];
+          const key = [a, b].sort().join("|");
+          edges.set(key, (edges.get(key) || 0) + 1);
+        }
+      }
+    });
+    return Array.from(edges.entries()).map(([key, weight]) => {
+      const [a, b] = key.split("|");
+      return { a, b, weight };
+    });
+  }
+
+  function computeNetworkMetrics(treatments, edges) {
+    const n = treatments.length;
+    if (n <= 1) {
+      return { density: 0, components: n, meanDegree: 0 };
+    }
+    const adjacency = new Map();
+    treatments.forEach(treatment => adjacency.set(treatment, new Set()));
+    edges.forEach(edge => {
+      adjacency.get(edge.a)?.add(edge.b);
+      adjacency.get(edge.b)?.add(edge.a);
+    });
+
+    let components = 0;
+    const visited = new Set();
+    treatments.forEach(treatment => {
+      if (visited.has(treatment)) return;
+      components += 1;
+      const stack = [treatment];
+      visited.add(treatment);
+      while (stack.length) {
+        const node = stack.pop();
+        adjacency.get(node)?.forEach(neighbor => {
+          if (!visited.has(neighbor)) {
+            visited.add(neighbor);
+            stack.push(neighbor);
+          }
+        });
+      }
+    });
+
+    const maxEdges = (n * (n - 1)) / 2;
+    const density = maxEdges ? edges.length / maxEdges : 0;
+    const meanDegree = n ? (2 * edges.length) / n : 0;
+    return { density, components, meanDegree };
+  }
+
+  function computeStudyTreatmentMeans(data) {
+    const byStudy = new Map();
+    data.forEach(row => {
+      if (!byStudy.has(row.study)) byStudy.set(row.study, new Map());
+      const byTreatment = byStudy.get(row.study);
+      if (!byTreatment.has(row.treatment)) {
+        byTreatment.set(row.treatment, { sum: 0, weightSum: 0 });
+      }
+      const entry = byTreatment.get(row.treatment);
+      entry.sum += row.value * row.weight;
+      entry.weightSum += row.weight;
+    });
+    const means = new Map();
+    byStudy.forEach((map, study) => {
+      const treatmentMeans = new Map();
+      map.forEach((entry, treatment) => {
+        if (!entry.weightSum) return;
+        treatmentMeans.set(treatment, {
+          mean: entry.sum / entry.weightSum,
+          var: 1 / entry.weightSum,
+          weightSum: entry.weightSum
+        });
+      });
+      means.set(study, treatmentMeans);
+    });
+    return means;
+  }
+
+  function pairKey(a, b) {
+    return [a, b].sort().join("|");
+  }
+
+  function computeDirectPairEstimates(data, treatments) {
+    const studyMeans = computeStudyTreatmentMeans(data);
+    const direct = new Map();
+    studyMeans.forEach(treatMap => {
+      const treatmentsInStudy = Array.from(treatMap.keys());
+      for (let i = 0; i < treatmentsInStudy.length; i += 1) {
+        for (let j = i + 1; j < treatmentsInStudy.length; j += 1) {
+          const a = treatmentsInStudy[i];
+          const b = treatmentsInStudy[j];
+          const aEntry = treatMap.get(a);
+          const bEntry = treatMap.get(b);
+          if (!aEntry || !bEntry) continue;
+          const diff = aEntry.mean - bEntry.mean;
+          const varDiff = aEntry.var + bEntry.var;
+          if (!Number.isFinite(varDiff) || varDiff <= 0) continue;
+          const weight = 1 / varDiff;
+          const key = pairKey(a, b);
+          if (!direct.has(key)) {
+            direct.set(key, { sum: 0, weightSum: 0, n: 0, a, b });
+          }
+          const entry = direct.get(key);
+          entry.sum += weight * diff;
+          entry.weightSum += weight;
+          entry.n += 1;
+        }
+      }
+    });
+    const results = new Map();
+    direct.forEach(entry => {
+      const diff = entry.weightSum ? entry.sum / entry.weightSum : NaN;
+      const varDiff = entry.weightSum ? 1 / entry.weightSum : NaN;
+      results.set(pairKey(entry.a, entry.b), {
+        diff,
+        var: varDiff,
+        n: entry.n,
+        a: entry.a,
+        b: entry.b
+      });
+    });
+    return results;
+  }
+
+  function getDirectEstimate(directMap, a, b) {
+    const key = pairKey(a, b);
+    const entry = directMap.get(key);
+    if (!entry) return null;
+    const forward = entry.a === a;
+    return {
+      diff: forward ? entry.diff : -entry.diff,
+      var: entry.var,
+      n: entry.n
+    };
+  }
+
+  function computeLoopInconsistency(treatments, directMap) {
+    let count = 0;
+    let maxAbs = 0;
+    let q = 0;
+    for (let i = 0; i < treatments.length; i += 1) {
+      for (let j = i + 1; j < treatments.length; j += 1) {
+        for (let k = j + 1; k < treatments.length; k += 1) {
+          const a = treatments[i];
+          const b = treatments[j];
+          const c = treatments[k];
+          const ab = getDirectEstimate(directMap, a, b);
+          const bc = getDirectEstimate(directMap, b, c);
+          const ac = getDirectEstimate(directMap, a, c);
+          if (!ab || !bc || !ac) continue;
+          const inconsistency = ab.diff + bc.diff - ac.diff;
+          const varSum = ab.var + bc.var + ac.var;
+          if (!Number.isFinite(varSum) || varSum <= 0) continue;
+          count += 1;
+          maxAbs = Math.max(maxAbs, Math.abs(inconsistency));
+          q += (inconsistency * inconsistency) / varSum;
+        }
+      }
+    }
+    const p = count ? chiSquarePValue(q, count) : NaN;
+    return { count, maxAbs, q, p };
+  }
+
+  function computeInconsistency(data, fits) {
+    const byStudy = new Map();
+    data.forEach(row => {
+      if (!fits[row.treatment]) return;
+      if (!byStudy.has(row.study)) byStudy.set(row.study, []);
+      byStudy.get(row.study).push(row);
+    });
+    let q = 0;
+    let df = 0;
+    byStudy.forEach(rows => {
+      if (rows.length < 2) return;
+      for (let i = 0; i < rows.length; i += 1) {
+        for (let j = i + 1; j < rows.length; j += 1) {
+          const a = rows[i];
+          const b = rows[j];
+          const predA = predictModel(fits[a.treatment], a.dose);
+          const predB = predictModel(fits[b.treatment], b.dose);
+          const obsDiff = a.value - b.value;
+          const predDiff = predA - predB;
+          const resid = obsDiff - predDiff;
+          const varA = a.weight > 0 ? 1 / a.weight : 1;
+          const varB = b.weight > 0 ? 1 / b.weight : 1;
+          const weight = 1 / (varA + varB);
+          if (!Number.isFinite(weight) || weight <= 0) continue;
+          q += weight * resid * resid;
+          df += 1;
+        }
+      }
+    });
+    return { q, df };
+  }
+
+  function computeDesignByTreatment(data, fits) {
+    const designAgg = new Map();
+    const byStudy = new Map();
+    data.forEach(row => {
+      if (!fits[row.treatment]) return;
+      if (!byStudy.has(row.study)) byStudy.set(row.study, []);
+      byStudy.get(row.study).push(row);
+    });
+
+    byStudy.forEach(rows => {
+      const treatments = Array.from(new Set(rows.map(row => row.treatment))).sort();
+      const key = treatments.join("|");
+      let sum = 0;
+      let weightSum = 0;
+      rows.forEach(row => {
+        const pred = predictModel(fits[row.treatment], row.dose);
+        const resid = row.value - pred;
+        const weight = Number.isFinite(row.weight) ? row.weight : 1;
+        sum += weight * resid;
+        weightSum += weight;
+      });
+      if (!designAgg.has(key)) {
+        designAgg.set(key, { sum: 0, weight: 0 });
+      }
+      const entry = designAgg.get(key);
+      entry.sum += sum;
+      entry.weight += weightSum;
+    });
+
+    let q = 0;
+    designAgg.forEach(entry => {
+      if (!entry.weight) return;
+      const meanResid = entry.sum / entry.weight;
+      q += entry.weight * meanResid * meanResid;
+    });
+    const df = Math.max(designAgg.size - 1, 0);
+    return { q, df };
+  }
+
+  function buildCurves(fits, range, referenceFit) {
+    const curves = [];
+    const steps = 48;
+    const doses = buildDoseGrid(range, steps);
+
+    state.treatments.forEach((treatment, index) => {
+      const fit = fits[treatment];
+      if (!fit) return;
+      const points = [];
+      doses.forEach(dose => {
+        let value = predictModel(fit, dose);
+        if (referenceFit) value -= predictModel(referenceFit, dose);
+        points.push({ dose, value });
+      });
+      curves.push({ treatment, color: palette[index % palette.length], points });
+    });
+    return curves;
+  }
+
+  function buildDoseGrid(range, steps) {
+    const minDose = range.minDose;
+    const maxDose = range.maxDose === range.minDose ? range.minDose + 1 : range.maxDose;
+    const doses = [];
+    for (let i = 0; i <= steps; i += 1) {
+      doses.push(minDose + (maxDose - minDose) * (i / steps));
+    }
+    return doses;
+  }
+
+  function computeStats(fits, range, targetDose, referenceFit) {
+    const stats = [];
+    const minDose = range.minDose;
+    const maxDose = range.maxDose === range.minDose ? range.minDose + 1 : range.maxDose;
+    const steps = 80;
+    const bootstrap = state.bootstrapResult;
+    const referenceCandidates = state.reference ? state.fitCandidates?.[state.reference] : null;
+    const referenceAvgPredict = referenceFit
+      ? dose => {
+        const avg = computeModelAveragePrediction(referenceCandidates, dose);
+        return Number.isFinite(avg) ? avg : predictModel(referenceFit, dose);
+      }
+      : null;
+    const selectionLevel = state.selectionBias || "none";
+    let referenceCopas = NaN;
+    if (referenceFit && selectionLevel !== "none") {
+      const refPoints = state.data.filter(row => row.treatment === state.reference);
+      referenceCopas = computeCopasAdjustedTarget(refPoints, referenceFit, selectionLevel, targetDose);
+    }
+
+    state.treatments.forEach((treatment, index) => {
+      const fit = fits[treatment];
+      if (!fit) return;
+      const avgPredict = dose => {
+        const avg = computeModelAveragePrediction(state.fitCandidates?.[treatment], dose);
+        return Number.isFinite(avg) ? avg : predictModel(fit, dose);
+      };
+      const treatmentPoints = state.data.filter(row => row.treatment === treatment);
+
+      let auc = 0;
+      let prevDose = minDose;
+      let prevVal = predictModel(fit, minDose);
+      if (referenceFit) prevVal -= predictModel(referenceFit, minDose);
+      let aucAvg = 0;
+      let prevValAvg = avgPredict(minDose);
+      if (referenceAvgPredict) prevValAvg -= referenceAvgPredict(minDose);
+
+      for (let i = 1; i <= steps; i += 1) {
+        const dose = minDose + (maxDose - minDose) * (i / steps);
+        const delta = dose - prevDose;
+        let val = predictModel(fit, dose);
+        if (referenceFit) val -= predictModel(referenceFit, dose);
+        auc += (prevVal + val) * 0.5 * delta;
+        prevVal = val;
+        let valAvg = avgPredict(dose);
+        if (referenceAvgPredict) valAvg -= referenceAvgPredict(dose);
+        aucAvg += (prevValAvg + valAvg) * 0.5 * delta;
+        prevValAvg = valAvg;
+        prevDose = dose;
+      }
+
+      let target = predictModel(fit, targetDose);
+      if (referenceFit) target -= predictModel(referenceFit, targetDose);
+      let targetAvg = avgPredict(targetDose);
+      if (referenceAvgPredict) targetAvg -= referenceAvgPredict(targetDose);
+      let targetCopas = computeCopasAdjustedTarget(treatmentPoints, fit, selectionLevel, targetDose);
+      if (referenceFit && Number.isFinite(targetCopas) && Number.isFinite(referenceCopas)) {
+        targetCopas -= referenceCopas;
+      }
+      const targetCI = bootstrap?.targetCI?.[treatment] || {};
+      const sucra = bootstrap?.sucra?.[treatment];
+      const pbest = bootstrap?.pBest?.[treatment];
+      const tau2 = Number.isFinite(state.tau2ByTreatment[treatment]) ? state.tau2ByTreatment[treatment] : 0;
+      const residualVar = Number.isFinite(fit.df) && fit.df > 0 ? fit.sse / fit.df : fit.rmse * fit.rmse;
+      const piRadius = Number.isFinite(residualVar) ? 1.96 * Math.sqrt(Math.max(0, residualVar + tau2)) : NaN;
+      const piLow = Number.isFinite(piRadius) ? target - piRadius : NaN;
+      const piHigh = Number.isFinite(piRadius) ? target + piRadius : NaN;
+
+      stats.push({
+        treatment,
+        n: fit.n,
+        e0: fit.e0,
+        emax: Number.isFinite(fit.emax) ? fit.emax : fit.slope,
+        ed50: fit.ed50,
+        hill: fit.hill,
+        model: fit.model,
+        modelLabel: fit.modelLabel,
+        modelDetail: fit.modelDetail,
+        aic: fit.aic,
+        aicc: fit.aicc,
+        bic: fit.bic,
+        q: fit.sse,
+        df: fit.df,
+        dispersion: fit.df ? fit.sse / fit.df : NaN,
+        logLik: fit.logLik,
+        tau2,
+        rmse: fit.rmse,
+        r2: fit.r2,
+        auc,
+        aucAvg,
+        target,
+        targetAvg,
+        targetCopas,
+        targetLow: targetCI.low,
+        targetHigh: targetCI.high,
+        piLow,
+        piHigh,
+        sucra,
+        pbest,
+        includeInRanking: !(referenceFit && state.reference && treatment === state.reference),
+        color: palette[index % palette.length]
+      });
+    });
+
+    return stats;
+  }
+
+  function updateSummary(stats) {
+    dom.summaryBody.innerHTML = "";
+    stats.forEach(item => {
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td><span style="color:${item.color}">${item.treatment}</span></td>
+        <td>${item.modelLabel || "-"}</td>
+        <td>${item.modelDetail || "-"}</td>
+        <td>${item.n}</td>
+        <td>${formatNumber(item.e0)}</td>
+        <td>${formatNumber(item.emax)}</td>
+        <td>${formatNumber(item.ed50)}</td>
+        <td>${formatNumber(item.hill)}</td>
+        <td>${formatNumber(item.aic)}</td>
+        <td>${formatNumber(item.aicc)}</td>
+        <td>${formatNumber(item.bic)}</td>
+        <td>${formatNumber(item.q)}</td>
+        <td>${formatNumber(item.df)}</td>
+        <td>${formatNumber(item.dispersion)}</td>
+        <td>${formatNumber(item.tau2)}</td>
+        <td>${formatCI(item.piLow, item.piHigh)}</td>
+        <td>${formatNumber(item.rmse)}</td>
+        <td>${formatNumber(item.r2)}</td>
+        <td>${formatNumber(item.auc)}</td>
+        <td>${formatNumber(item.aucAvg)}</td>
+        <td>${formatNumber(item.target)}</td>
+        <td>${formatNumber(item.targetAvg)}</td>
+        <td>${formatNumber(item.targetCopas)}</td>
+        <td>${formatCI(item.targetLow, item.targetHigh)}</td>
+        <td>${formatProbability(item.sucra)}</td>
+        <td>${formatProbability(item.pbest)}</td>
+      `;
+      dom.summaryBody.appendChild(row);
+    });
+  }
+
+  function formatNumber(value) {
+    if (!Number.isFinite(value)) return "-";
+    const abs = Math.abs(value);
+    if (abs >= 1000) return value.toFixed(1);
+    if (abs >= 10) return value.toFixed(2);
+    return value.toFixed(3);
+  }
+
+  function formatCI(low, high) {
+    if (!Number.isFinite(low) || !Number.isFinite(high)) return "-";
+    return `${formatNumber(low)} to ${formatNumber(high)}`;
+  }
+
+  function formatProbability(value) {
+    if (!Number.isFinite(value)) return "-";
+    return `${(value * 100).toFixed(1)}%`;
+  }
+
+  function computeAiccWeights(candidates) {
+    if (!candidates || !candidates.length) return null;
+    const valid = candidates.filter(item => Number.isFinite(item.aicc));
+    if (!valid.length) return null;
+    const min = Math.min(...valid.map(item => item.aicc));
+    const weights = valid.map(item => ({
+      model: item.model,
+      weight: Math.exp(-0.5 * (item.aicc - min))
+    }));
+    const sum = weights.reduce((acc, item) => acc + item.weight, 0) || 1;
+    return weights.map(item => ({ model: item.model, weight: item.weight / sum }));
+  }
+
+  function computeModelAveragePrediction(candidates, dose) {
+    if (!candidates || !candidates.length) return NaN;
+    const weights = computeAiccWeights(candidates);
+    if (!weights) return NaN;
+    const byModel = new Map(candidates.map(fit => [fit.model, fit]));
+    let sum = 0;
+    let wsum = 0;
+    weights.forEach(item => {
+      const fit = byModel.get(item.model);
+      if (!fit) return;
+      sum += item.weight * predictModel(fit, dose);
+      wsum += item.weight;
+    });
+    return wsum ? sum / wsum : NaN;
+  }
+
+  function getSelectionParams(level) {
+    if (level === "mild") return { alpha: -0.8, beta: 0.6 };
+    if (level === "moderate") return { alpha: -1.4, beta: 1.0 };
+    if (level === "strong") return { alpha: -2.0, beta: 1.5 };
+    return { alpha: 0, beta: 0 };
+  }
+
+  function selectionWeight(se, level) {
+    if (!Number.isFinite(se) || se <= 0 || level === "none") return 1;
+    const { alpha, beta } = getSelectionParams(level);
+    if (alpha === 0 && beta === 0) return 1;
+    const score = alpha + beta * (1 / se);
+    return 1 / (1 + Math.exp(-score));
+  }
+
+  function computeCopasAdjustedTarget(points, fit, selectionLevel, targetDose) {
+    if (!fit || selectionLevel === "none") return NaN;
+    const adjusted = points.map(point => ({
+      ...point,
+      weight: point.weight * selectionWeight(point.se, selectionLevel)
+    }));
+    const adjustedFit = fitModel(adjusted, fit.model);
+    if (!adjustedFit) return NaN;
+    return predictModel(adjustedFit, targetDose);
+  }
+
+  function erf(value) {
+    const sign = value >= 0 ? 1 : -1;
+    const x = Math.abs(value);
+    const t = 1 / (1 + 0.3275911 * x);
+    const a1 = 0.254829592;
+    const a2 = -0.284496736;
+    const a3 = 1.421413741;
+    const a4 = -1.453152027;
+    const a5 = 1.061405429;
+    const poly = (((((a5 * t) + a4) * t + a3) * t + a2) * t + a1) * t;
+    const y = 1 - poly * Math.exp(-x * x);
+    return sign * y;
+  }
+
+  function normalCdf(value) {
+    return 0.5 * (1 + erf(value / Math.SQRT2));
+  }
+
+  function gammln(value) {
+    const cof = [
+      76.18009172947146,
+      -86.50532032941677,
+      24.01409824083091,
+      -1.231739572450155,
+      0.001208650973866179,
+      -0.000005395239384953
+    ];
+    let x = value;
+    let y = value;
+    let tmp = x + 5.5;
+    tmp -= (x + 0.5) * Math.log(tmp);
+    let ser = 1.000000000190015;
+    for (let i = 0; i < cof.length; i += 1) {
+      y += 1;
+      ser += cof[i] / y;
+    }
+    return -tmp + Math.log(2.5066282746310005 * ser / x);
+  }
+
+  function gammaSeries(a, x) {
+    const ITMAX = 100;
+    const EPS = 1e-8;
+    if (x === 0) return 0;
+    let sum = 1 / a;
+    let del = sum;
+    let ap = a;
+    for (let n = 1; n <= ITMAX; n += 1) {
+      ap += 1;
+      del *= x / ap;
+      sum += del;
+      if (Math.abs(del) < Math.abs(sum) * EPS) break;
+    }
+    return sum * Math.exp(-x + a * Math.log(x) - gammln(a));
+  }
+
+  function gammaContinuedFraction(a, x) {
+    const ITMAX = 100;
+    const EPS = 1e-8;
+    const FPMIN = 1e-30;
+    let b = x + 1 - a;
+    let c = 1 / FPMIN;
+    let d = 1 / b;
+    let h = d;
+    for (let i = 1; i <= ITMAX; i += 1) {
+      const an = -i * (i - a);
+      b += 2;
+      d = an * d + b;
+      if (Math.abs(d) < FPMIN) d = FPMIN;
+      c = b + an / c;
+      if (Math.abs(c) < FPMIN) c = FPMIN;
+      d = 1 / d;
+      const delta = d * c;
+      h *= delta;
+      if (Math.abs(delta - 1) < EPS) break;
+    }
+    return Math.exp(-x + a * Math.log(x) - gammln(a)) * h;
+  }
+
+  function gammaQ(a, x) {
+    if (!Number.isFinite(a) || !Number.isFinite(x) || x < 0 || a <= 0) return NaN;
+    if (x < a + 1) return 1 - gammaSeries(a, x);
+    return gammaContinuedFraction(a, x);
+  }
+
+  function chiSquarePValue(q, df) {
+    if (!Number.isFinite(q) || !Number.isFinite(df) || df <= 0) return NaN;
+    return gammaQ(df / 2, q / 2);
+  }
+
+  function computeEggerTest(points, fit) {
+    if (!fit) return { intercept: NaN, p: NaN };
+    const rows = points.filter(row => Number.isFinite(row.se) && row.se > 0);
+    if (rows.length < 3) return { intercept: NaN, p: NaN };
+    const x = [];
+    const y = [];
+    rows.forEach(row => {
+      const pred = predictModel(fit, row.dose);
+      const resid = row.value - pred;
+      const se = row.se;
+      x.push(1 / se);
+      y.push(resid / se);
+    });
+    const n = x.length;
+    const meanX = x.reduce((sum, v) => sum + v, 0) / n;
+    const meanY = y.reduce((sum, v) => sum + v, 0) / n;
+    let sxx = 0;
+    let sxy = 0;
+    for (let i = 0; i < n; i += 1) {
+      const dx = x[i] - meanX;
+      sxx += dx * dx;
+      sxy += dx * (y[i] - meanY);
+    }
+    if (sxx === 0) return { intercept: NaN, p: NaN };
+    const slope = sxy / sxx;
+    const intercept = meanY - slope * meanX;
+    let rss = 0;
+    for (let i = 0; i < n; i += 1) {
+      const fitY = intercept + slope * x[i];
+      const resid = y[i] - fitY;
+      rss += resid * resid;
+    }
+    const df = n - 2;
+    const s2 = df > 0 ? rss / df : NaN;
+    const seIntercept = Number.isFinite(s2) ? Math.sqrt(s2 * (1 / n + (meanX * meanX) / sxx)) : NaN;
+    const t = Number.isFinite(seIntercept) && seIntercept > 0 ? intercept / seIntercept : NaN;
+    const pRaw = Number.isFinite(t) ? 2 * (1 - normalCdf(Math.abs(t))) : NaN;
+    const p = Number.isFinite(pRaw) ? Math.max(0, Math.min(1, pRaw)) : NaN;
+    return { intercept, p };
+  }
+
+  function computeInfluence(points, fit, referenceFit) {
+    if (!fit || points.length < 3) return { study: "", delta: NaN };
+    const studies = Array.from(new Set(points.map(point => point.study)));
+    if (studies.length < 2) return { study: "", delta: NaN };
+    const refPred = referenceFit ? predictModel(referenceFit, state.targetDose) : 0;
+    const baseTarget = predictModel(fit, state.targetDose) - refPred;
+    let maxStudy = "";
+    let maxDelta = 0;
+    studies.forEach(study => {
+      const subset = points.filter(point => point.study !== study);
+      if (subset.length < 2) return;
+      const looFit = fitModel(subset, fit.model);
+      if (!looFit) return;
+      const looTarget = predictModel(looFit, state.targetDose) - refPred;
+      const delta = looTarget - baseTarget;
+      if (!maxStudy || Math.abs(delta) > Math.abs(maxDelta)) {
+        maxStudy = study;
+        maxDelta = delta;
+      }
+    });
+    return { study: maxStudy, delta: maxDelta };
+  }
+
+  function computeStdResidualSummary(points, fit, tau2 = 0) {
+    if (!fit || !points.length) return { maxAbs: NaN };
+    let maxAbs = 0;
+    points.forEach(point => {
+      const variance = point.weight > 0 ? 1 / point.weight : 1;
+      const denom = Math.sqrt(Math.max(variance + tau2, 0));
+      if (!denom) return;
+      const resid = point.value - predictModel(fit, point.dose);
+      const std = resid / denom;
+      if (Math.abs(std) > Math.abs(maxAbs)) {
+        maxAbs = std;
+      }
+    });
+    return { maxAbs };
+  }
+
+  function kendallTau(x, y) {
+    let concordant = 0;
+    let discordant = 0;
+    let tiesX = 0;
+    let tiesY = 0;
+    for (let i = 0; i < x.length; i += 1) {
+      for (let j = i + 1; j < x.length; j += 1) {
+        const dx = x[i] - x[j];
+        const dy = y[i] - y[j];
+        if (dx === 0 && dy === 0) continue;
+        if (dx === 0) {
+          tiesX += 1;
+          continue;
+        }
+        if (dy === 0) {
+          tiesY += 1;
+          continue;
+        }
+        if (dx * dy > 0) concordant += 1;
+        else discordant += 1;
+      }
+    }
+    const denom = Math.sqrt((concordant + discordant + tiesX) * (concordant + discordant + tiesY));
+    const tau = denom ? (concordant - discordant) / denom : NaN;
+    return { tau, concordant, discordant };
+  }
+
+  function computeBeggTest(points, fit) {
+    if (!fit) return { tau: NaN, p: NaN };
+    const rows = points.filter(row => Number.isFinite(row.se) && row.se > 0);
+    if (rows.length < 4) return { tau: NaN, p: NaN };
+    const x = [];
+    const y = [];
+    rows.forEach(row => {
+      const resid = row.value - predictModel(fit, row.dose);
+      x.push(resid);
+      y.push(row.se);
+    });
+    const { tau } = kendallTau(x, y);
+    const n = rows.length;
+    const varTau = n > 1 ? (2 * (2 * n + 5)) / (9 * n * (n - 1)) : NaN;
+    const z = Number.isFinite(varTau) && varTau > 0 ? tau / Math.sqrt(varTau) : NaN;
+    const p = Number.isFinite(z) ? 2 * (1 - normalCdf(Math.abs(z))) : NaN;
+    return { tau, p };
+  }
+
+  function computeNodeSplit(detail, referenceTreatment, directMap) {
+    if (!detail || !referenceTreatment || detail.treatment === referenceTreatment) {
+      return { direct: NaN, indirect: NaN, diff: NaN, p: NaN };
+    }
+    const direct = getDirectEstimate(directMap, detail.treatment, referenceTreatment);
+    const directDiff = direct?.diff;
+    const directVar = direct?.var;
+    const indirect = detail.target;
+    let indirectVar = NaN;
+    if (Number.isFinite(detail.targetLow) && Number.isFinite(detail.targetHigh)) {
+      const half = (detail.targetHigh - detail.targetLow) / 2;
+      indirectVar = (half / 1.96) * (half / 1.96);
+    } else if (Number.isFinite(detail.rmse) && Number.isFinite(detail.n) && detail.n > 0) {
+      indirectVar = (detail.rmse * detail.rmse) / detail.n;
+    }
+    if (!Number.isFinite(directDiff) || !Number.isFinite(directVar)) {
+      return { direct: NaN, indirect, diff: NaN, p: NaN };
+    }
+    const diff = directDiff - indirect;
+    const varSum = directVar + (Number.isFinite(indirectVar) ? indirectVar : 0);
+    const z = varSum > 0 ? diff / Math.sqrt(varSum) : NaN;
+    const p = Number.isFinite(z) ? 2 * (1 - normalCdf(Math.abs(z))) : NaN;
+    return { direct: directDiff, indirect, diff, p };
+  }
+
+  function computeTrimFill(points, fit) {
+    if (!fit) return { missing: 0, side: "" };
+    let pos = 0;
+    let neg = 0;
+    points.forEach(point => {
+      if (!Number.isFinite(point.se) || point.se <= 0) return;
+      const resid = point.value - predictModel(fit, point.dose);
+      const z = resid / point.se;
+      if (z >= 0) pos += 1;
+      else neg += 1;
+    });
+    const missing = Math.abs(pos - neg);
+    const side = pos > neg ? "left" : "right";
+    return { missing, side };
+  }
+
+  function computeFunnelContours(points, fit) {
+    if (!fit) return "";
+    let c01 = 0;
+    let c05 = 0;
+    let c10 = 0;
+    let cns = 0;
+    points.forEach(point => {
+      if (!Number.isFinite(point.se) || point.se <= 0) return;
+      const resid = point.value - predictModel(fit, point.dose);
+      const z = Math.abs(resid / point.se);
+      const p = 2 * (1 - normalCdf(z));
+      if (p < 0.01) c01 += 1;
+      else if (p < 0.05) c05 += 1;
+      else if (p < 0.1) c10 += 1;
+      else cns += 1;
+    });
+    return `p<0.01:${c01} | <0.05:${c05} | <0.1:${c10} | ns:${cns}`;
+  }
+
+  function computeRobustSe(points, fit) {
+    if (!fit) return { se: NaN, seCr2: NaN, studies: 0 };
+    const byStudy = new Map();
+    points.forEach(point => {
+      if (!byStudy.has(point.study)) byStudy.set(point.study, { sum: 0, weight: 0 });
+      const entry = byStudy.get(point.study);
+      const resid = point.value - predictModel(fit, point.dose);
+      entry.sum += point.weight * resid;
+      entry.weight += point.weight;
+    });
+    const studyMeans = [];
+    byStudy.forEach(entry => {
+      if (!entry.weight) return;
+      studyMeans.push(entry.sum / entry.weight);
+    });
+    const n = studyMeans.length;
+    if (n < 2) return { se: NaN, seCr2: NaN, studies: n };
+    const mean = studyMeans.reduce((sum, v) => sum + v, 0) / n;
+    const varMean = studyMeans.reduce((sum, v) => sum + (v - mean) * (v - mean), 0) / (n - 1);
+    const se = Math.sqrt(varMean / n);
+    const seCr2 = n > 2 ? se * Math.sqrt(n / (n - 1)) : se;
+    return { se, seCr2, studies: n };
+  }
+
+  function updateDiagnostics(stats) {
+    if (!dom.diagQ) return;
+    const valid = stats.filter(item => Number.isFinite(item.q));
+    const totalQ = valid.reduce((sum, item) => sum + item.q, 0);
+    const totalDf = valid.reduce((sum, item) => sum + (Number.isFinite(item.df) ? item.df : 0), 0);
+    const dispersion = totalDf ? totalQ / totalDf : NaN;
+    const i2 = Number.isFinite(state.globalI2) ? state.globalI2 : (totalQ > totalDf ? (totalQ - totalDf) / totalQ : 0);
+    const meanRmse = valid.length ? valid.reduce((sum, item) => sum + (Number.isFinite(item.rmse) ? item.rmse : 0), 0) / valid.length : NaN;
+    const meanR2 = valid.length ? valid.reduce((sum, item) => sum + (Number.isFinite(item.r2) ? item.r2 : 0), 0) / valid.length : NaN;
+
+    dom.diagQ.textContent = formatNumber(totalQ);
+    dom.diagQp.textContent = formatNumber(chiSquarePValue(totalQ, totalDf));
+    dom.diagDf.textContent = formatNumber(totalDf);
+    dom.diagI2.textContent = formatProbability(i2);
+    dom.diagDispersion.textContent = formatNumber(dispersion);
+    dom.diagTau2.textContent = formatNumber(state.globalTau2);
+    dom.diagH2.textContent = formatNumber(state.globalH2);
+    dom.diagRmse.textContent = formatNumber(meanRmse);
+    dom.diagR2.textContent = formatNumber(meanR2);
+    dom.diagIncQ.textContent = formatNumber(state.inconsistency?.q);
+    dom.diagIncDf.textContent = formatNumber(state.inconsistency?.df);
+    dom.diagIncP.textContent = formatNumber(chiSquarePValue(state.inconsistency?.q, state.inconsistency?.df));
+    dom.diagDesignQ.textContent = formatNumber(state.designByTreatment?.q);
+    dom.diagDesignDf.textContent = formatNumber(state.designByTreatment?.df);
+    dom.diagDesignP.textContent = formatNumber(chiSquarePValue(state.designByTreatment?.q, state.designByTreatment?.df));
+    dom.diagCovBeta.textContent = formatNumber(state.covariateBeta);
+    dom.diagCovMean.textContent = formatNumber(state.covariateMean);
+    dom.diagDensity.textContent = formatNumber(state.networkMetrics?.density);
+    dom.diagComponents.textContent = formatNumber(state.networkMetrics?.components);
+    dom.diagMeanDegree.textContent = formatNumber(state.networkMetrics?.meanDegree);
+    dom.diagLoopCount.textContent = formatNumber(state.loopMetrics?.count);
+    dom.diagLoopMax.textContent = formatNumber(state.loopMetrics?.maxAbs);
+    dom.diagLoopQ.textContent = formatNumber(state.loopMetrics?.q);
+    dom.diagLoopP.textContent = formatNumber(state.loopMetrics?.p);
+
+    if (dom.diagnosticTreatment) {
+      const current = dom.diagnosticTreatment.value;
+      dom.diagnosticTreatment.innerHTML = "";
+      stats.forEach(item => {
+        const option = document.createElement("option");
+        option.value = item.treatment;
+        option.textContent = item.treatment;
+        dom.diagnosticTreatment.appendChild(option);
+      });
+      if (stats.some(item => item.treatment === current)) {
+        dom.diagnosticTreatment.value = current;
+      }
+    }
+
+    const selected = dom.diagnosticTreatment?.value || stats[0]?.treatment;
+    const detail = stats.find(item => item.treatment === selected);
+    if (!detail) return;
+    dom.diagTreatAic.textContent = formatNumber(detail.aic);
+    dom.diagTreatAicc.textContent = formatNumber(detail.aicc);
+    dom.diagTreatBic.textContent = formatNumber(detail.bic);
+    dom.diagTreatQ.textContent = formatNumber(detail.q);
+    dom.diagTreatQp.textContent = formatNumber(chiSquarePValue(detail.q, detail.df));
+    dom.diagTreatDf.textContent = formatNumber(detail.df);
+    dom.diagTreatDispersion.textContent = formatNumber(detail.dispersion);
+    dom.diagTreatLogLik.textContent = formatNumber(detail.logLik);
+    dom.diagTreatTau2.textContent = formatNumber(detail.tau2);
+    dom.diagTreatPiLow.textContent = formatNumber(detail.piLow);
+    dom.diagTreatPiHigh.textContent = formatNumber(detail.piHigh);
+    dom.diagTreatRmse.textContent = formatNumber(detail.rmse);
+    dom.diagTreatR2.textContent = formatNumber(detail.r2);
+
+    const treatmentFit = state.fits[detail.treatment];
+    const treatmentPoints = state.data.filter(row => row.treatment === detail.treatment);
+    const egger = computeEggerTest(treatmentPoints, treatmentFit);
+    dom.diagTreatEgger.textContent = formatNumber(egger.intercept);
+    dom.diagTreatEggerP.textContent = formatNumber(egger.p);
+    const begg = computeBeggTest(treatmentPoints, treatmentFit);
+    dom.diagTreatBegg.textContent = formatNumber(begg.tau);
+    dom.diagTreatBeggP.textContent = formatNumber(begg.p);
+    const referenceFit = state.reference ? state.fits[state.reference] : null;
+    const influence = computeInfluence(treatmentPoints, treatmentFit, referenceFit);
+    if (influence.study) {
+      dom.diagTreatInfluence.textContent = `${influence.study}: ${formatNumber(influence.delta)}`;
+    } else {
+      dom.diagTreatInfluence.textContent = "-";
+    }
+    const stdSummary = computeStdResidualSummary(treatmentPoints, treatmentFit, detail.tau2);
+    dom.diagTreatMaxStdResid.textContent = formatNumber(stdSummary.maxAbs);
+    if (dom.diagTreatModelDetail) {
+      dom.diagTreatModelDetail.textContent = detail.modelDetail || "-";
+    }
+    if (dom.diagNodeDirect) {
+      const nodeSplit = computeNodeSplit(detail, state.reference, state.directEstimates);
+      dom.diagNodeDirect.textContent = formatNumber(nodeSplit.direct);
+      dom.diagNodeIndirect.textContent = formatNumber(nodeSplit.indirect);
+      dom.diagNodeDiff.textContent = formatNumber(nodeSplit.diff);
+      dom.diagNodeP.textContent = formatNumber(nodeSplit.p);
+    }
+    if (dom.diagTrimFill) {
+      const trimFill = computeTrimFill(treatmentPoints, treatmentFit);
+      dom.diagTrimFill.textContent = trimFill.missing ? `${trimFill.missing} (${trimFill.side})` : "0";
+    }
+    if (dom.diagFunnelContours) {
+      dom.diagFunnelContours.textContent = computeFunnelContours(treatmentPoints, treatmentFit) || "-";
+    }
+    if (dom.diagHkScale) {
+      const hkScale = Math.sqrt(Math.max(1, detail.dispersion || 1));
+      dom.diagHkScale.textContent = formatNumber(hkScale);
+    }
+    if (dom.diagRobustSe) {
+      const robust = computeRobustSe(treatmentPoints, treatmentFit);
+      if (Number.isFinite(robust.seCr2)) {
+        dom.diagRobustSe.textContent = `CR2 ${formatNumber(robust.seCr2)}`;
+      } else {
+        dom.diagRobustSe.textContent = formatNumber(robust.se);
+      }
+    }
+    if (dom.diagCopasTarget) {
+      dom.diagCopasTarget.textContent = formatNumber(detail.targetCopas);
+    }
+
+    if (dom.diagModelWeights) {
+      const weights = computeAiccWeights(state.fitCandidates?.[detail.treatment]);
+      if (!weights) {
+        dom.diagModelWeights.textContent = "AICc weights unavailable for this treatment.";
+      } else {
+        const label = weights
+          .map(item => `${MODEL_LABELS[item.model] || item.model}: ${(item.weight * 100).toFixed(1)}%`)
+          .join(" | ");
+        dom.diagModelWeights.textContent = `AICc weights: ${label}`;
+      }
+    }
+  }
+
+  function computeDataSignature(rawData) {
+    let sum = 0;
+    rawData.forEach(row => {
+      const covariate = Number.isFinite(row.covariate) ? row.covariate : 0;
+      sum += row.dose * 0.01 + row.effect * 0.1 + row.weight * 0.001 + covariate * 0.05;
+    });
+    return `${rawData.length}-${sum.toFixed(3)}`;
+  }
+
+  function computeBootstrapKey() {
+    return JSON.stringify({
+      data: computeDataSignature(state.rawData),
+      reference: state.reference,
+      modelChoice: state.modelChoice,
+      freeBaseline: state.freeBaseline,
+      randomEffects: state.randomEffects,
+      multiArmAdjust: state.multiArmAdjust,
+      useCovariate: state.useCovariate,
+      tau2Method: state.tau2Method,
+      higherIsBetter: state.higherIsBetter,
+      targetDose: state.targetDose
+    });
+  }
+
+  function updateBootstrapStatus(message) {
+    if (!dom.bootstrapStatus) return;
+    dom.bootstrapStatus.textContent = message;
+  }
+
+  function clearBootstrap(message = "Bootstrap not run.") {
+    state.bootstrapResult = null;
+    state.bootstrapKey = "";
+    updateBootstrapStatus(message);
+  }
+
+  function updateRankTitle() {
+    if (!dom.rankTitle) return "";
+    let label = "Target effect";
+    if (state.rankMetric === "sucra") label = "SUCRA";
+    if (state.rankMetric === "pbest") label = "P(best)";
+    if (state.rankMetric === "target") {
+      label = `Target effect (${state.higherIsBetter ? "higher" : "lower"} best)`;
+    }
+    dom.rankTitle.textContent = label;
+    return label;
+  }
+
+  function syncTargetInputs(value) {
+    dom.targetDose.value = value;
+    dom.targetDoseNumber.value = value;
+  }
+
+  function updateReferenceOptions() {
+    const current = dom.referenceSelect.value;
+    dom.referenceSelect.innerHTML = "";
+    const emptyOption = document.createElement("option");
+    emptyOption.value = "";
+    emptyOption.textContent = "None";
+    dom.referenceSelect.appendChild(emptyOption);
+    state.allTreatments.forEach(treatment => {
+      const option = document.createElement("option");
+      option.value = treatment;
+      option.textContent = treatment;
+      dom.referenceSelect.appendChild(option);
+    });
+    if (state.allTreatments.includes(current)) {
+      dom.referenceSelect.value = current;
+    }
+  }
+
+  function updateCharts(stats, curves) {
+    const activeTab = dom.chartTabs?.querySelector("[data-tab-button].active")?.dataset.tabButton;
+    if (!activeTab) return;
+    const referenceFit = state.relativeMode ? state.fits[state.reference] : null;
+    if (activeTab === "dose") {
+      drawDoseChart(curves, state.data, state.range, state.logDose, referenceFit);
+      return;
+    }
+    if (activeTab === "rank") {
+      drawRankChart(stats.filter(item => item.includeInRanking), state.rankMetric);
+      return;
+    }
+    if (activeTab === "network") {
+      drawNetworkChart(state.treatments, state.edges);
+      return;
+    }
+    if (activeTab === "bias") {
+      drawBiasChart();
+    }
+  }
+
+  function drawDoseChart(curves, points, range, useLog, referenceFit) {
+    const canvas = dom.doseChart;
+    const ctx = canvas.getContext("2d");
+    const bounds = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = bounds.width * ratio;
+    canvas.height = bounds.height * ratio;
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+    const padding = { left: 54, right: 18, top: 24, bottom: 36 };
+    const width = bounds.width - padding.left - padding.right;
+    const height = bounds.height - padding.top - padding.bottom;
+
+    const minPos = Math.min(...points.filter(p => p.dose > 0).map(p => p.dose));
+    const safeMinPos = Number.isFinite(minPos) ? minPos : Math.max(range.maxDose, 1);
+    const logShift = safeMinPos * 0.2;
+
+    const xValue = dose => useLog ? Math.log10(dose + logShift) : dose;
+    const xMin = xValue(range.minDose);
+    const xMax = xValue(range.maxDose === range.minDose ? range.minDose + 1 : range.maxDose);
+
+    const values = curves.flatMap(curve => curve.points.map(p => p.value));
+    const pointValues = points.map(point => {
+      let value = point.value;
+      if (referenceFit) value -= predictModel(referenceFit, point.dose);
+      return value;
+    });
+    const yMinRaw = Math.min(...values, ...pointValues);
+    const yMaxRaw = Math.max(...values, ...pointValues);
+    const pad = (yMaxRaw - yMinRaw) * 0.2 || 1;
+    const yMin = yMinRaw - pad;
+    const yMax = yMaxRaw + pad;
+
+    const scaleX = dose => padding.left + ((xValue(dose) - xMin) / (xMax - xMin)) * width;
+    const scaleY = val => padding.top + height - ((val - yMin) / (yMax - yMin)) * height;
+
+    ctx.clearRect(0, 0, bounds.width, bounds.height);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 5; i += 1) {
+      const y = padding.top + (height * i) / 5;
+      ctx.beginPath();
+      ctx.moveTo(padding.left, y);
+      ctx.lineTo(padding.left + width, y);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.beginPath();
+    ctx.moveTo(padding.left, padding.top);
+    ctx.lineTo(padding.left, padding.top + height);
+    ctx.lineTo(padding.left + width, padding.top + height);
+    ctx.stroke();
+
+    state.hoverPoints = [];
+    const bands = state.showBands ? state.bootstrapResult?.bands : null;
+    curves.forEach(curve => {
+      const band = bands?.[curve.treatment];
+      const hasBand = band?.doses?.length && band?.lower?.some(Number.isFinite) && band?.upper?.some(Number.isFinite);
+      if (hasBand) {
+        ctx.fillStyle = curve.color;
+        ctx.globalAlpha = 0.18;
+        ctx.beginPath();
+        band.doses.forEach((dose, idx) => {
+          const x = scaleX(dose);
+          const y = scaleY(band.upper[idx]);
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        for (let i = band.doses.length - 1; i >= 0; i -= 1) {
+          const dose = band.doses[i];
+          const x = scaleX(dose);
+          const y = scaleY(band.lower[i]);
+          ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      ctx.strokeStyle = curve.color;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      curve.points.forEach((point, idx) => {
+        const x = scaleX(point.dose);
+        const y = scaleY(point.value);
+        if (idx === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    });
+
+    points.forEach(point => {
+      const curve = curves.find(c => c.treatment === point.treatment);
+      const color = curve ? curve.color : "#ffffff";
+      const x = scaleX(point.dose);
+      let yVal = point.value;
+      if (referenceFit) yVal -= predictModel(referenceFit, point.dose);
+      const y = scaleY(yVal);
+      const size = Math.min(6, 3 + Math.sqrt(point.weight));
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.75;
+      ctx.beginPath();
+      ctx.arc(x, y, size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      state.hoverPoints.push({ x, y, treatment: point.treatment, dose: point.dose, value: yVal, effect: point.effect });
+    });
+
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.font = "11px IBM Plex Sans, sans-serif";
+    ctx.fillText(useLog ? "Log dose" : "Dose", padding.left, bounds.height - 12);
+    ctx.save();
+    ctx.translate(14, padding.top + height / 2);
+    ctx.rotate(-Math.PI / 2);
+    const label = state.relativeMode && state.reference ? `Relative effect vs ${state.reference}` : "Effect";
+    ctx.fillText(label, 0, 0);
+    ctx.restore();
+  }
+
+  function drawRankChart(stats, metric) {
+    const canvas = dom.rankChart;
+    const ctx = canvas.getContext("2d");
+    const bounds = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = bounds.width * ratio;
+    canvas.height = bounds.height * ratio;
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+    ctx.clearRect(0, 0, bounds.width, bounds.height);
+    if (!stats.length) return;
+    const padding = { left: 110, right: 20, top: 20, bottom: 20 };
+    const width = bounds.width - padding.left - padding.right;
+
+    const getValue = item => {
+      if (metric === "sucra") return Number.isFinite(item.sucra) ? item.sucra : 0;
+      if (metric === "pbest") return Number.isFinite(item.pbest) ? item.pbest : 0;
+      return Number.isFinite(item.target) ? item.target : 0;
+    };
+
+    const direction = metric === "target" && !state.higherIsBetter ? 1 : -1;
+    const sorted = [...stats].sort((a, b) => direction * (getValue(a) - getValue(b)));
+    const values = sorted.map(getValue);
+    const maxVal = Math.max(...values);
+    const minVal = Math.min(...values);
+    const range = maxVal - minVal || 1;
+    const barHeight = Math.min(30, (bounds.height - padding.top - padding.bottom) / Math.max(sorted.length, 1));
+
+    sorted.forEach((item, idx) => {
+      const y = padding.top + idx * (barHeight + 6);
+      const value = getValue(item);
+      const normalized = (value - minVal) / range;
+      const barWidth = width * normalized;
+      ctx.fillStyle = "rgba(255,255,255,0.12)";
+      ctx.fillRect(padding.left, y, width, barHeight);
+      ctx.fillStyle = item.color;
+      ctx.fillRect(padding.left, y, barWidth, barHeight);
+      ctx.fillStyle = "rgba(255,255,255,0.8)";
+      ctx.font = "12px IBM Plex Sans, sans-serif";
+      ctx.fillText(item.treatment, 12, y + barHeight - 8);
+      const label = metric === "target" ? formatNumber(value) : formatProbability(value);
+      ctx.fillText(label, padding.left + barWidth + 8, y + barHeight - 8);
+    });
+  }
+
+  function drawNetworkChart(treatments, edges) {
+    const canvas = dom.networkChart;
+    const ctx = canvas.getContext("2d");
+    const bounds = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = bounds.width * ratio;
+    canvas.height = bounds.height * ratio;
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+    ctx.clearRect(0, 0, bounds.width, bounds.height);
+    const center = { x: bounds.width / 2, y: bounds.height / 2 };
+    const radius = Math.min(bounds.width, bounds.height) / 2 - 30;
+
+    const nodes = treatments.map((treatment, idx) => {
+      const angle = (Math.PI * 2 * idx) / treatments.length - Math.PI / 2;
+      return {
+        treatment,
+        x: center.x + Math.cos(angle) * radius,
+        y: center.y + Math.sin(angle) * radius,
+        color: palette[idx % palette.length]
+      };
+    });
+
+    edges.forEach(edge => {
+      const from = nodes.find(n => n.treatment === edge.a);
+      const to = nodes.find(n => n.treatment === edge.b);
+      if (!from || !to) return;
+      ctx.strokeStyle = "rgba(255,255,255,0.15)";
+      ctx.lineWidth = Math.min(6, 1 + edge.weight);
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+    });
+
+    nodes.forEach(node => {
+      ctx.fillStyle = node.color;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.font = "12px IBM Plex Sans, sans-serif";
+      ctx.fillText(node.treatment, node.x + 14, node.y + 4);
+    });
+  }
+
+  function computeBaujatPoints(points, fit) {
+    const byStudy = new Map();
+    points.forEach(point => {
+      if (!byStudy.has(point.study)) byStudy.set(point.study, []);
+      byStudy.get(point.study).push(point);
+    });
+    const baseTarget = predictModel(fit, state.targetDose);
+    const results = [];
+    byStudy.forEach((rows, study) => {
+      let q = 0;
+      rows.forEach(row => {
+        const resid = row.value - predictModel(fit, row.dose);
+        q += row.weight * resid * resid;
+      });
+      const subset = points.filter(point => point.study !== study);
+      const looFit = subset.length >= 2 ? fitModel(subset, fit.model) : null;
+      const looTarget = looFit ? predictModel(looFit, state.targetDose) : NaN;
+      const influence = Number.isFinite(looTarget) ? Math.abs(looTarget - baseTarget) : NaN;
+      results.push({ study, q, influence });
+    });
+    return results;
+  }
+
+  function drawFunnelPlot(points, fit) {
+    const canvas = dom.biasChart;
+    const ctx = canvas.getContext("2d");
+    const bounds = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = bounds.width * ratio;
+    canvas.height = bounds.height * ratio;
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, bounds.width, bounds.height);
+
+    if (!points.length || !fit) return;
+    const data = points.filter(point => Number.isFinite(point.se) && point.se > 0);
+    if (!data.length) return;
+    const maxSe = Math.max(...data.map(point => point.se));
+    const minSe = Math.min(...data.map(point => point.se));
+    const center = 0;
+    const pad = 0.15 * maxSe;
+    const xMax = Math.max(...data.map(point => Math.abs(point.value - predictModel(fit, point.dose)))) || 1;
+    const plotWidth = bounds.width - 70;
+    const plotHeight = bounds.height - 50;
+    const left = 50;
+    const top = 20;
+
+    const scaleX = x => left + ((x + xMax) / (2 * xMax)) * plotWidth;
+    const scaleY = se => top + ((se - minSe) / (maxSe - minSe + pad)) * plotHeight;
+
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(scaleX(0), top);
+    ctx.lineTo(scaleX(0), top + plotHeight);
+    ctx.stroke();
+
+    const drawContour = z => {
+      ctx.strokeStyle = "rgba(255,255,255,0.1)";
+      ctx.beginPath();
+      ctx.moveTo(scaleX(-z * minSe), scaleY(minSe));
+      ctx.lineTo(scaleX(-z * maxSe), scaleY(maxSe));
+      ctx.moveTo(scaleX(z * minSe), scaleY(minSe));
+      ctx.lineTo(scaleX(z * maxSe), scaleY(maxSe));
+      ctx.stroke();
+    };
+    drawContour(1.96);
+    drawContour(2.58);
+
+    data.forEach(point => {
+      const resid = point.value - predictModel(fit, point.dose);
+      const x = scaleX(resid);
+      const y = scaleY(point.se);
+      ctx.fillStyle = "rgba(255,183,3,0.8)";
+      ctx.beginPath();
+      ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.font = "11px IBM Plex Sans, sans-serif";
+    ctx.fillText("Residual", left, bounds.height - 12);
+    ctx.save();
+    ctx.translate(14, top + plotHeight / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText("SE", 0, 0);
+    ctx.restore();
+  }
+
+  function drawBaujatPlot(points, fit) {
+    const canvas = dom.biasChart;
+    const ctx = canvas.getContext("2d");
+    const bounds = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = bounds.width * ratio;
+    canvas.height = bounds.height * ratio;
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, bounds.width, bounds.height);
+
+    if (!points.length || !fit) return;
+    const baujat = computeBaujatPoints(points, fit);
+    if (!baujat.length) return;
+    const maxQ = Math.max(...baujat.map(item => item.q)) || 1;
+    const maxInfluence = Math.max(...baujat.map(item => item.influence)) || 1;
+    const plotWidth = bounds.width - 70;
+    const plotHeight = bounds.height - 50;
+    const left = 50;
+    const top = 20;
+
+    const scaleX = x => left + (x / maxQ) * plotWidth;
+    const scaleY = y => top + plotHeight - (y / maxInfluence) * plotHeight;
+
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(left, top);
+    ctx.lineTo(left, top + plotHeight);
+    ctx.lineTo(left + plotWidth, top + plotHeight);
+    ctx.stroke();
+
+    baujat.forEach(item => {
+      const x = scaleX(item.q);
+      const y = scaleY(item.influence);
+      ctx.fillStyle = "rgba(0,180,216,0.85)";
+      ctx.beginPath();
+      ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.6)";
+      ctx.font = "10px IBM Plex Sans, sans-serif";
+      ctx.fillText(item.study, x + 6, y - 4);
+    });
+
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.font = "11px IBM Plex Sans, sans-serif";
+    ctx.fillText("Contribution to Q", left, bounds.height - 12);
+    ctx.save();
+    ctx.translate(14, top + plotHeight / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText("Influence (|delta|)", 0, 0);
+    ctx.restore();
+  }
+
+  function drawBiasChart() {
+    const selected = dom.diagnosticTreatment?.value;
+    const fit = selected ? state.fits[selected] : null;
+    const points = selected ? state.data.filter(row => row.treatment === selected) : [];
+    const mode = dom.biasPlotSelect?.value || "funnel";
+    if (mode === "baujat") {
+      drawBaujatPlot(points, fit);
+    } else {
+      drawFunnelPlot(points, fit);
+    }
+  }
+
+  function updateAnalysis() {
+    if (!state.rawData.length || !state.wasm) return;
+    state.freeBaseline = dom.baselineToggle.checked;
+    state.logDose = dom.logDoseToggle.checked;
+    state.modelChoice = dom.modelSelect.value;
+    state.rankMetric = dom.rankMetric.value;
+    state.higherIsBetter = dom.higherBetterToggle.checked;
+    state.showBands = dom.showBandsToggle.checked;
+    state.randomEffects = dom.randomEffectsToggle.checked;
+    state.multiArmAdjust = dom.multiArmToggle.checked;
+    state.tau2Method = dom.tau2Method?.value || "dl";
+    state.selectionBias = dom.selectionBias?.value || "none";
+    if (dom.tau2Method) {
+      dom.tau2Method.disabled = !state.randomEffects;
+    }
+    const hasCovariate = state.rawData.some(row => Number.isFinite(row.covariate));
+    if (dom.covariateToggle) {
+      dom.covariateToggle.disabled = !hasCovariate;
+      if (!hasCovariate) {
+        dom.covariateToggle.checked = false;
+      }
+    }
+    state.useCovariate = dom.covariateToggle.checked && hasCovariate;
+    const iterValue = Number.parseInt(dom.bootstrapIter.value, 10);
+    if (Number.isFinite(iterValue)) state.bootstrap.iterations = iterValue;
+    state.targetDose = Number.parseFloat(dom.targetDose.value) || 0;
+
+    const rawGroups = groupByTreatment(state.rawData);
+    state.allTreatments = Array.from(rawGroups.keys());
+    updateReferenceOptions();
+    if (state.pendingSettings?.reference) {
+      dom.referenceSelect.value = state.pendingSettings.reference;
+    }
+    state.reference = dom.referenceSelect.value;
+    if (state.pendingSettings) {
+      state.pendingSettings = null;
+    }
+
+    const prepared = prepareData(state.rawData, { multiArmAdjust: state.multiArmAdjust });
+    const networkResult = fitNetwork(
+      prepared.data,
+      state.modelChoice,
+      { randomEffects: state.randomEffects, useCovariate: state.useCovariate, tau2Method: state.tau2Method },
+      3
+    );
+    state.data = networkResult.adjustedData;
+    state.fits = networkResult.fits;
+    state.treatments = networkResult.treatments;
+    state.fitCandidates = networkResult.candidates || {};
+    state.validation = prepared.validation;
+    state.covariateBeta = networkResult.covariateBeta;
+    state.covariateMean = networkResult.covariateMean;
+    state.tau2ByTreatment = networkResult.tau2ByTreatment || {};
+    state.globalTau2 = networkResult.globalTau2;
+    state.globalI2 = networkResult.globalI2;
+    state.globalH2 = networkResult.globalH2;
+    if (state.useCovariate) {
+      const missingCov = state.rawData.filter(row => !Number.isFinite(row.covariate)).length;
+      if (missingCov) {
+        state.validation.warnings.push(`${missingCov} rows missing covariate; excluded from covariate fit.`);
+      }
+    }
+    state.validation.summary.missingStudyOffsets = networkResult.missingStudies;
+    if (networkResult.missingStudies) {
+      state.validation.warnings.push(`${networkResult.missingStudies} studies have no fitted treatments; offsets default to 0.`);
+    }
+    if (state.useCovariate && !Number.isFinite(state.covariateBeta)) {
+      state.validation.warnings.push("Covariate effect could not be estimated; using unadjusted effects.");
+    }
+
+    if (!state.data.length) {
+      dom.summaryBody.innerHTML = "";
+      setStatus("No usable rows after filtering.", "warn");
+      clearBootstrap();
+      return;
+    }
+
+    state.range = computeRange(state.data);
+
+    const maxDose = state.range.maxDose;
+    dom.targetDose.max = maxDose;
+    dom.targetDoseNumber.max = maxDose;
+    if (state.targetDose > maxDose) {
+      state.targetDose = maxDose;
+      syncTargetInputs(maxDose);
+    }
+
+    state.edges = buildEdges(state.data);
+    state.networkMetrics = computeNetworkMetrics(state.treatments, state.edges);
+    state.directEstimates = computeDirectPairEstimates(state.data, state.treatments);
+    state.loopMetrics = computeLoopInconsistency(state.treatments, state.directEstimates);
+    state.inconsistency = computeInconsistency(state.data, state.fits);
+    state.designByTreatment = computeDesignByTreatment(state.data, state.fits);
+
+    const referenceFit = state.reference ? state.fits[state.reference] : null;
+    state.relativeMode = Boolean(referenceFit);
+    if (state.reference && !referenceFit) {
+      state.validation.warnings.push(`Reference ${state.reference} not fitted; showing absolute effects.`);
+    }
+    renderDataQuality(state.validation);
+    const curves = buildCurves(state.fits, state.range, referenceFit);
+    const stats = computeStats(state.fits, state.range, state.targetDose, referenceFit);
+    state.lastCurves = curves;
+    state.lastStats = stats;
+
+    const activeTab = dom.chartTabs?.querySelector("[data-tab-button].active")?.dataset.tabButton;
+    if (activeTab === "rank") {
+      updateRankTitle();
+    } else if (dom.rankTitle) {
+      dom.rankTitle.textContent = "";
+    }
+    const nextBootstrapKey = computeBootstrapKey();
+    if (state.bootstrapResult && state.bootstrapKey !== nextBootstrapKey) {
+      clearBootstrap("Bootstrap cleared due to setting changes.");
+    }
+
+    updateSummary(stats);
+    updateDiagnostics(stats);
+    updateCharts(stats, curves);
+  }
+
+  async function runBootstrap() {
+    if (state.bootstrap.running || !state.rawData.length) return;
+    if (!Object.keys(state.fits).length) {
+      updateBootstrapStatus("No fitted treatments to bootstrap.");
+      return;
+    }
+    const iterations = Math.max(50, Number.parseInt(dom.bootstrapIter.value, 10) || 200);
+    state.bootstrap.iterations = iterations;
+    state.bootstrap.running = true;
+    updateBootstrapStatus(`Bootstrapping ${iterations} iterations...`);
+    setStatus("Bootstrap running...", "warn");
+
+    try {
+      const studies = Array.from(new Set(state.rawData.map(row => row.study)));
+      const studyRows = new Map();
+      state.rawData.forEach(row => {
+        if (!studyRows.has(row.study)) studyRows.set(row.study, []);
+        studyRows.get(row.study).push(row);
+      });
+
+      const doses = buildDoseGrid(state.range, 48);
+      const treatments = state.treatments.slice();
+      const referenceExcluded = Boolean(state.reference && state.fits[state.reference]);
+      const rankingTreatments = referenceExcluded
+        ? treatments.filter(treatment => treatment !== state.reference)
+        : treatments.slice();
+      const bandSamples = {};
+      const targetSamples = {};
+      const rankCounts = {};
+      const targetCounts = {};
+      treatments.forEach(treatment => {
+        bandSamples[treatment] = doses.map(() => []);
+        targetSamples[treatment] = [];
+        targetCounts[treatment] = 0;
+        rankCounts[treatment] = Array(treatments.length).fill(0);
+      });
+
+      const rng = makeRng(Math.floor(Date.now() % 2147483647));
+      let validIterations = 0;
+      let validRankIterations = 0;
+
+      for (let iter = 0; iter < iterations; iter += 1) {
+        const sampled = [];
+        for (let i = 0; i < studies.length; i += 1) {
+          const pick = studies[Math.floor(rng() * studies.length)];
+          const rows = studyRows.get(pick) || [];
+          rows.forEach(row => sampled.push(row));
+        }
+
+        const prepared = prepareData(sampled, { multiArmAdjust: state.multiArmAdjust });
+        if (!prepared.data.length) continue;
+        const networkResult = fitNetwork(
+          prepared.data,
+          state.modelChoice,
+          {
+            randomEffects: state.randomEffects,
+            useCovariate: state.useCovariate,
+            tau2Method: state.tau2Method
+          },
+          2
+        );
+        const fits = networkResult.fits;
+        const referenceFit = state.reference ? fits[state.reference] : null;
+        let hasAnyFit = false;
+
+        treatments.forEach(treatment => {
+          const fit = fits[treatment];
+          if (!fit) return;
+          hasAnyFit = true;
+          doses.forEach((dose, idx) => {
+            let pred = predictModel(fit, dose);
+            if (referenceFit) pred -= predictModel(referenceFit, dose);
+            bandSamples[treatment][idx].push(pred);
+          });
+          let target = predictModel(fit, state.targetDose);
+          if (referenceFit) target -= predictModel(referenceFit, state.targetDose);
+          targetSamples[treatment].push(target);
+          targetCounts[treatment] += 1;
+        });
+
+        if (!hasAnyFit) continue;
+
+        const rankPool = rankingTreatments.filter(treatment => Boolean(fits[treatment]));
+        const referenceReady = !referenceExcluded || Boolean(referenceFit);
+        if (referenceReady && rankPool.length === rankingTreatments.length && rankPool.length > 1) {
+          const preds = {};
+          rankPool.forEach(treatment => {
+            let pred = predictModel(fits[treatment], state.targetDose);
+            if (referenceFit) pred -= predictModel(referenceFit, state.targetDose);
+            preds[treatment] = pred;
+          });
+
+          const ordered = rankPool
+            .slice()
+            .sort((a, b) => (state.higherIsBetter ? preds[b] - preds[a] : preds[a] - preds[b]));
+
+          ordered.forEach((treatment, idx) => {
+            rankCounts[treatment][idx] += 1;
+          });
+          validRankIterations += 1;
+        }
+
+        validIterations += 1;
+
+        if (iter % 20 === 19) {
+          updateBootstrapStatus(`Bootstrapping ${iter + 1}/${iterations}...`);
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+      }
+
+      const bands = {};
+      const targetCI = {};
+      treatments.forEach(treatment => {
+        const lower = bandSamples[treatment].map(samples => quantile(samples, 0.025));
+        const upper = bandSamples[treatment].map(samples => quantile(samples, 0.975));
+        bands[treatment] = { doses, lower, upper };
+        targetCI[treatment] = {
+          low: quantile(targetSamples[treatment], 0.025),
+          high: quantile(targetSamples[treatment], 0.975)
+        };
+      });
+
+      const pBest = {};
+      const sucra = {};
+      treatments.forEach(treatment => {
+        if (referenceExcluded && treatment === state.reference) {
+          pBest[treatment] = NaN;
+          sucra[treatment] = NaN;
+          return;
+        }
+        const counts = rankCounts[treatment];
+        const total = validRankIterations || 0;
+        if (!total) {
+          pBest[treatment] = NaN;
+          sucra[treatment] = NaN;
+          return;
+        }
+        const probs = counts.map(count => count / total);
+        pBest[treatment] = probs[0] || 0;
+        if (rankingTreatments.length <= 1) {
+          sucra[treatment] = 0;
+          return;
+        }
+        let accum = 0;
+        probs.forEach((prob, idx) => {
+          accum += (rankingTreatments.length - (idx + 1)) * prob;
+        });
+        sucra[treatment] = accum / (rankingTreatments.length - 1);
+      });
+
+      state.bootstrapResult = {
+        iterations,
+        validIterations,
+        validRankIterations,
+        targetCounts,
+        bands,
+        targetCI,
+        pBest,
+        sucra
+      };
+      state.bootstrapKey = computeBootstrapKey();
+
+      let suffix = "No valid bootstrap fits.";
+      if (validIterations) {
+        suffix = `Completed (${validIterations}/${iterations} bands, ${validRankIterations}/${iterations} ranks).`;
+      }
+      updateBootstrapStatus(suffix);
+      setStatus("Bootstrap completed.");
+      updateAnalysis();
+    } catch (error) {
+      updateBootstrapStatus("Bootstrap failed.");
+      setStatus("Bootstrap failed.", "warn");
+      console.error(error);
+    } finally {
+      state.bootstrap.running = false;
+    }
+  }
+
+  function getSettingsSnapshot() {
+    return {
+      reference: state.reference,
+      modelChoice: state.modelChoice,
+      freeBaseline: state.freeBaseline,
+      logDose: state.logDose,
+      randomEffects: state.randomEffects,
+      multiArmAdjust: state.multiArmAdjust,
+      useCovariate: state.useCovariate,
+      tau2Method: state.tau2Method,
+      selectionBias: state.selectionBias,
+      targetDose: state.targetDose,
+      rankMetric: state.rankMetric,
+      higherIsBetter: state.higherIsBetter,
+      showBands: state.showBands,
+      bootstrapIterations: state.bootstrap.iterations
+    };
+  }
+
+  function encodeSettings(settings) {
+    try {
+      return btoa(unescape(encodeURIComponent(JSON.stringify(settings))));
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function decodeSettings(encoded) {
+    try {
+      return JSON.parse(decodeURIComponent(escape(atob(encoded))));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function applySettings(settings) {
+    if (!settings) return;
+    if (settings.modelChoice) dom.modelSelect.value = settings.modelChoice;
+    if (typeof settings.freeBaseline === "boolean") dom.baselineToggle.checked = settings.freeBaseline;
+    if (typeof settings.logDose === "boolean") dom.logDoseToggle.checked = settings.logDose;
+    if (typeof settings.randomEffects === "boolean") dom.randomEffectsToggle.checked = settings.randomEffects;
+    if (typeof settings.multiArmAdjust === "boolean") dom.multiArmToggle.checked = settings.multiArmAdjust;
+    if (typeof settings.useCovariate === "boolean") dom.covariateToggle.checked = settings.useCovariate;
+    if (settings.tau2Method && dom.tau2Method) dom.tau2Method.value = settings.tau2Method;
+    if (settings.selectionBias && dom.selectionBias) dom.selectionBias.value = settings.selectionBias;
+    if (typeof settings.higherIsBetter === "boolean") dom.higherBetterToggle.checked = settings.higherIsBetter;
+    if (typeof settings.showBands === "boolean") dom.showBandsToggle.checked = settings.showBands;
+    if (settings.rankMetric) dom.rankMetric.value = settings.rankMetric;
+    if (Number.isFinite(settings.targetDose)) {
+      syncTargetInputs(settings.targetDose);
+    }
+    if (Number.isFinite(settings.bootstrapIterations)) {
+      dom.bootstrapIter.value = settings.bootstrapIterations;
+      state.bootstrap.iterations = settings.bootstrapIterations;
+    }
+    if (settings.reference) {
+      state.pendingSettings = { reference: settings.reference };
+    }
+  }
+
+  function applySettingsFromHash() {
+    const hash = window.location.hash.slice(1);
+    if (!hash.startsWith("settings=")) return;
+    const encoded = hash.replace("settings=", "");
+    const settings = decodeSettings(encoded);
+    applySettings(settings);
+  }
+
+  function downloadFile(filename, content, type) {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function csvEscape(value) {
+    if (value === null || value === undefined) return "";
+    const str = String(value);
+    if (/[",\n\r]/.test(str)) {
+      return `"${str.replace(/"/g, "\"\"")}"`;
+    }
+    return str;
+  }
+
+  function exportSummaryCsv() {
+    if (!state.lastStats.length) return;
+    const headers = [
+      "treatment",
+      "model",
+      "model_detail",
+      "n",
+      "e0",
+      "emax_or_slope",
+      "ed50",
+      "hill",
+      "aic",
+      "aicc",
+      "bic",
+      "q",
+      "df",
+      "q_df",
+      "q_p",
+      "tau2",
+      "tau2_method",
+      "pi_low",
+      "pi_high",
+      "rmse",
+      "r2",
+      "auc",
+      "auc_avg",
+      "target",
+      "target_avg",
+      "target_copas",
+      "target_low",
+      "target_high",
+      "sucra",
+      "p_best"
+    ];
+    const rows = state.lastStats.map(item => ([
+      item.treatment,
+      item.modelLabel,
+      item.modelDetail,
+      item.n,
+      item.e0,
+      item.emax,
+      item.ed50,
+      item.hill,
+      item.aic,
+      item.aicc,
+      item.bic,
+      item.q,
+      item.df,
+      item.dispersion,
+      chiSquarePValue(item.q, item.df),
+      item.tau2,
+      state.tau2Method,
+      item.piLow,
+      item.piHigh,
+      item.rmse,
+      item.r2,
+      item.auc,
+      item.aucAvg,
+      item.target,
+      item.targetAvg,
+      item.targetCopas,
+      item.targetLow,
+      item.targetHigh,
+      item.sucra,
+      item.pbest
+    ]));
+    const csv = [headers.join(","), ...rows.map(row => row.map(cell => csvEscape(cell ?? "")).join(","))].join("\n");
+    downloadFile("nma-dose-response-summary.csv", csv, "text/csv");
+  }
+
+  function exportPredCsv() {
+    if (!state.lastCurves.length) return;
+    const headers = ["treatment", "dose", "prediction", "lower_95", "upper_95"];
+    const rows = [];
+    const bands = state.bootstrapResult?.bands || {};
+    state.lastCurves.forEach(curve => {
+      const band = bands[curve.treatment];
+      curve.points.forEach((point, idx) => {
+        const lower = band?.lower?.[idx];
+        const upper = band?.upper?.[idx];
+        rows.push([curve.treatment, point.dose, point.value, lower, upper]);
+      });
+    });
+    const csv = [headers.join(","), ...rows.map(row => row.map(cell => csvEscape(cell ?? "")).join(","))].join("\n");
+    downloadFile("nma-dose-response-predictions.csv", csv, "text/csv");
+  }
+
+  function exportJson() {
+    const payload = {
+      settings: getSettingsSnapshot(),
+      validation: state.validation,
+      summary: state.lastStats,
+      fits: state.fits,
+      bootstrap: state.bootstrapResult,
+      rawData: state.rawData,
+      analysisData: state.data,
+      diagnostics: {
+        tau2ByTreatment: state.tau2ByTreatment,
+        globalTau2: state.globalTau2,
+        globalI2: state.globalI2,
+        globalH2: state.globalH2,
+        tau2Method: state.tau2Method,
+        networkMetrics: state.networkMetrics,
+        loopMetrics: state.loopMetrics,
+        inconsistency: state.inconsistency,
+        designByTreatment: state.designByTreatment,
+        covariateBeta: state.covariateBeta,
+        covariateMean: state.covariateMean
+      }
+    };
+    downloadFile("nma-dose-response-session.json", JSON.stringify(payload, null, 2), "application/json");
+  }
+
+  function exportCharts() {
+    const charts = [
+      { canvas: dom.doseChart, name: "dose-response.png" },
+      { canvas: dom.rankChart, name: "ranking.png" },
+      { canvas: dom.networkChart, name: "network.png" },
+      { canvas: dom.biasChart, name: "bias.png" }
+    ];
+    charts.forEach(item => {
+      if (!item.canvas) return;
+      const url = item.canvas.toDataURL("image/png");
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = item.name;
+      link.click();
+    });
+  }
+
+  function copySettingsLink() {
+    const encoded = encodeSettings(getSettingsSnapshot());
+    if (!encoded) return;
+    const base = window.location.href.split("#")[0];
+    const link = `${base}#settings=${encoded}`;
+    window.location.hash = `settings=${encoded}`;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(link).then(() => {
+        dom.exportStatus.textContent = "Settings link copied.";
+      }).catch(() => {
+        dom.exportStatus.textContent = link;
+      });
+    } else {
+      dom.exportStatus.textContent = link;
+    }
+  }
+
+  function handleTooltip(event) {
+    const rect = dom.doseChart.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    let nearest = null;
+    let distance = 999;
+
+    state.hoverPoints.forEach(point => {
+      const dx = point.x - x;
+      const dy = point.y - y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < distance) {
+        distance = dist;
+        nearest = point;
+      }
+    });
+
+    if (nearest && distance < 12) {
+      dom.doseTooltip.style.opacity = "1";
+      dom.doseTooltip.style.transform = `translate(${nearest.x + 12}px, ${nearest.y - 12}px)`;
+      const base = `${nearest.treatment} | dose ${formatNumber(nearest.dose)}`;
+      if (state.relativeMode) {
+        dom.doseTooltip.textContent = `${base} | rel ${formatNumber(nearest.value)} | abs ${formatNumber(nearest.effect)}`;
+      } else {
+        dom.doseTooltip.textContent = `${base} | effect ${formatNumber(nearest.value)}`;
+      }
+    } else {
+      dom.doseTooltip.style.opacity = "0";
+    }
+  }
+
+  function bindEvents() {
+    if (dom.chartTabs) {
+      const tabButtons = Array.from(dom.chartTabs.querySelectorAll("[data-tab-button]"));
+      const tabPanels = Array.from(document.querySelectorAll(".tab-panel[data-tab]"));
+      const tabTitles = {
+        dose: "Dose Response Curves",
+        rank: "Target Dose Ranking",
+        network: "Treatment Network",
+        bias: "Bias & Robustness"
+      };
+
+      const activateTab = tabId => {
+        const hasTab = Boolean(tabId);
+        tabPanels.forEach(panel => {
+          panel.classList.toggle("active", hasTab && panel.dataset.tab === tabId);
+        });
+        tabButtons.forEach(button => {
+          button.classList.toggle("active", hasTab && button.dataset.tabButton === tabId);
+        });
+        if (dom.chartHeader) {
+          dom.chartHeader.textContent = hasTab ? (tabTitles[tabId] || "Charts") : "Select a chart tab";
+        }
+        if (dom.rankTitle) {
+          dom.rankTitle.textContent = hasTab && tabId === "rank" ? updateRankTitle() : "";
+        }
+        if (dom.chartEmpty) {
+          dom.chartEmpty.style.display = hasTab ? "none" : "block";
+        }
+        if (hasTab) {
+          requestAnimationFrame(() => {
+            if (state.lastStats.length) updateCharts(state.lastStats, state.lastCurves);
+          });
+        }
+      };
+
+      tabButtons.forEach(button => {
+        button.addEventListener("click", () => {
+          activateTab(button.dataset.tabButton);
+        });
+      });
+
+      activateTab(null);
+    }
+
+    dom.loadSample.addEventListener("click", () => {
+      dom.csvInput.value = SAMPLE_CSV;
+      state.rawData = parseCSV(SAMPLE_CSV);
+      updateAnalysis();
+      setStatus("Sample loaded.");
+    });
+
+    dom.parseCsv.addEventListener("click", () => {
+      const parsed = parseCSV(dom.csvInput.value);
+      if (!parsed.length) {
+        setStatus("CSV parse failed. Check headers.", "warn");
+        return;
+      }
+      state.rawData = parsed;
+      updateAnalysis();
+      setStatus(`Parsed ${parsed.length} rows.`);
+    });
+
+    dom.fileInput.addEventListener("change", event => {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        dom.csvInput.value = reader.result;
+        const parsed = parseCSV(reader.result);
+        if (!parsed.length) {
+          setStatus("CSV parse failed. Check headers.", "warn");
+          return;
+        }
+        state.rawData = parsed;
+        updateAnalysis();
+        setStatus(`Loaded ${file.name}.`);
+      };
+      reader.readAsText(file);
+    });
+
+    dom.dropZone.addEventListener("dragover", event => {
+      event.preventDefault();
+      dom.dropZone.classList.add("dragover");
+    });
+
+    dom.dropZone.addEventListener("dragleave", () => {
+      dom.dropZone.classList.remove("dragover");
+    });
+
+    dom.dropZone.addEventListener("drop", event => {
+      event.preventDefault();
+      dom.dropZone.classList.remove("dragover");
+      const file = event.dataTransfer.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        dom.csvInput.value = reader.result;
+        const parsed = parseCSV(reader.result);
+        if (!parsed.length) {
+          setStatus("CSV parse failed. Check headers.", "warn");
+          return;
+        }
+        state.rawData = parsed;
+        updateAnalysis();
+        setStatus(`Loaded ${file.name}.`);
+      };
+      reader.readAsText(file);
+    });
+
+    dom.referenceSelect.addEventListener("change", updateAnalysis);
+    dom.baselineToggle.addEventListener("change", updateAnalysis);
+    dom.logDoseToggle.addEventListener("change", updateAnalysis);
+    dom.modelSelect.addEventListener("change", updateAnalysis);
+    dom.rankMetric.addEventListener("change", updateAnalysis);
+    dom.higherBetterToggle.addEventListener("change", updateAnalysis);
+    dom.showBandsToggle.addEventListener("change", updateAnalysis);
+    dom.randomEffectsToggle.addEventListener("change", updateAnalysis);
+    dom.multiArmToggle.addEventListener("change", updateAnalysis);
+    dom.covariateToggle.addEventListener("change", updateAnalysis);
+    if (dom.tau2Method) {
+      dom.tau2Method.addEventListener("change", updateAnalysis);
+    }
+    if (dom.selectionBias) {
+      dom.selectionBias.addEventListener("change", updateAnalysis);
+    }
+
+    dom.targetDose.addEventListener("input", () => {
+      syncTargetInputs(dom.targetDose.value);
+      updateAnalysis();
+    });
+
+    dom.targetDoseNumber.addEventListener("change", () => {
+      const value = Number.parseFloat(dom.targetDoseNumber.value) || 0;
+      syncTargetInputs(value);
+      updateAnalysis();
+    });
+
+    if (dom.diagnosticTreatment) {
+      dom.diagnosticTreatment.addEventListener("change", () => {
+        if (state.lastStats.length) updateDiagnostics(state.lastStats);
+        if (dom.chartTabs?.querySelector("[data-tab-button].active")?.dataset.tabButton === "bias") {
+          updateCharts(state.lastStats, state.lastCurves);
+        }
+      });
+    }
+    if (dom.biasPlotSelect) {
+      dom.biasPlotSelect.addEventListener("change", () => {
+        if (state.lastStats.length) updateCharts(state.lastStats, state.lastCurves);
+      });
+    }
+
+    dom.runBootstrap.addEventListener("click", () => {
+      runBootstrap();
+    });
+
+    dom.clearBootstrap.addEventListener("click", () => {
+      clearBootstrap();
+      updateAnalysis();
+    });
+
+    dom.exportJson.addEventListener("click", () => {
+      exportJson();
+      dom.exportStatus.textContent = "Exported JSON session.";
+    });
+
+    dom.exportSummaryCsv.addEventListener("click", () => {
+      exportSummaryCsv();
+      dom.exportStatus.textContent = "Exported summary CSV.";
+    });
+
+    dom.exportPredCsv.addEventListener("click", () => {
+      exportPredCsv();
+      dom.exportStatus.textContent = "Exported predictions CSV.";
+    });
+
+    dom.exportCharts.addEventListener("click", () => {
+      exportCharts();
+      dom.exportStatus.textContent = "Exported chart images.";
+    });
+
+    dom.copyLink.addEventListener("click", () => {
+      copySettingsLink();
+    });
+
+    dom.doseChart.addEventListener("mousemove", handleTooltip);
+    dom.doseChart.addEventListener("mouseleave", () => {
+      dom.doseTooltip.style.opacity = "0";
+    });
+
+    window.addEventListener("resize", () => {
+      if (state.rawData.length) updateAnalysis();
+    });
+  }
+
+  async function init() {
+    try {
+      state.wasm = await loadWasm();
+      setStatus("Engine ready.");
+    } catch (error) {
+      setStatus("WASM load failed.", "warn");
+      console.error(error);
+      return;
+    }
+    bindEvents();
+    dom.csvInput.value = SAMPLE_CSV;
+    state.rawData = parseCSV(SAMPLE_CSV);
+    applySettingsFromHash();
+    updateAnalysis();
+    setStatus("Sample loaded.");
+  }
+
+  init();
+})();
