@@ -1,1 +1,4 @@
 *.eps
+
+# Added by portfolio cleanup — untrack node_modules
+node_modules/
