@@ -2,3 +2,11 @@
 
 # Added by portfolio cleanup — untrack node_modules
 node_modules/
+
+# Sentinel pre-push hook output (auto-generated per session)
+STUCK_FAILURES.md
+STUCK_FAILURES.jsonl
+sentinel-findings.md
+sentinel-findings.jsonl
+review-findings.md
+review-findings.jsonl
