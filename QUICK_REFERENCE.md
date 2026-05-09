@@ -4,10 +4,10 @@
 
 ```bash
 # Selenium (79 tests)
-python C:/Users/user/nma-dose-response-app/comprehensive_feature_test_v2.py
+python comprehensive_feature_test_v2.py
 
 # R Benchmark (31 tests)
-"C:/Program Files/R/R-4.5.2/bin/Rscript.exe" C:/Users/user/nma_dose_response_benchmark.R
+Rscript nma_dose_response_benchmark.R
 ```
 
 ---
