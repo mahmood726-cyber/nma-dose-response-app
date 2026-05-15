@@ -1,6 +1,6 @@
 Mahmood Ahmad
 Tahir Heart Institute
-author@example.com
+mahmood.ahmad2@nhs.net
 
 NMA Dose-Response Studio: Browser-Based Network Meta-Analysis with Dose-Response Modeling
 
